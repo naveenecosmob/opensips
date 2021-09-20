@@ -34,22 +34,19 @@ extern const str uac_reg_state[];
 
 static char call_id_ftag_buf[MD5_LEN];
 
-int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr,
-	unsigned int all_contacts);
 
 void reg_print_record(reg_record_t *rec) {
 	LM_DBG("checking uac=[%p] state=[%d][%.*s] expires=[%d]"
 			" last_register_sent=[%d] registration_timeout=[%d]"
 			" auth_user[%p][%d]->[%.*s] auth_password=[%p][%d]->[%.*s]"
-			" sock=[%p] clustering=[%.*s/%d] enabled=[%s]\n",
+			" sock=[%p] clustering=[%.*s/%d]\n",
 		rec, rec->state,
 		uac_reg_state[rec->state].len, uac_reg_state[rec->state].s, rec->expires,
 		(unsigned int)rec->last_register_sent, (unsigned int)rec->registration_timeout,
 		rec->auth_user.s, rec->auth_user.len, rec->auth_user.len, rec->auth_user.s,
 		rec->auth_password.s, rec->auth_password.len,
 		rec->auth_password.len, rec->auth_password.s, rec->td.send_sock,
-		rec->cluster_shtag.len, rec->cluster_shtag.s, rec->cluster_id,
-		rec->flags&REG_ENABLED ? "yes" : "no");
+		rec->cluster_shtag.len, rec->cluster_shtag.s, rec->cluster_id);
 	LM_DBG("    RURI=[%p][%d]->[%.*s]\n", rec->td.rem_target.s, rec->td.rem_target.len,
 			rec->td.rem_target.len, rec->td.rem_target.s);
 	LM_DBG("      To=[%p][%d]->[%.*s]\n", rec->td.rem_uri.s, rec->td.rem_uri.len,
@@ -105,6 +102,7 @@ static void gen_call_id_ftag(str *aor, str *now, str *call_id_ftag)
 	return;
 }
 
+
 void new_call_id_ftag_4_record(reg_record_t *rec, str *now)
 {
 	str call_id_ftag;
@@ -121,39 +119,8 @@ void new_call_id_ftag_4_record(reg_record_t *rec, str *now)
 	return;
 }
 
-int match_reload_record(void *e_data, void *data, void *n_data)
-{
-	reg_record_t *rec = (reg_record_t*)e_data;
-	reg_record_t *new_rec = (reg_record_t*)n_data;
-	record_coords_t *coords = (record_coords_t *)data;
 
-	if (!str_strcmp(&coords->contact, &rec->contact_uri) &&
-		!str_strcmp(&coords->registrar, &rec->td.rem_target)) {
-		if (!(new_rec->flags&REG_ENABLED) && rec->flags&REG_ENABLED &&
-			rec->state == REGISTERED_STATE) {
-			if(send_unregister((unsigned long)coords->extra, rec, NULL, 0)==1)
-				rec->state = UNREGISTERING_STATE;
-			else
-				rec->state = INTERNAL_ERROR_STATE;
-		} else if (new_rec->flags&REG_ENABLED && rec->flags&REG_ENABLED &&
-				rec->state == REGISTERED_STATE) {
-			memcpy(new_rec->td.id.call_id.s, rec->td.id.call_id.s,
-			    new_rec->td.id.call_id.len);
-			memcpy(new_rec->td.id.loc_tag.s, rec->td.id.loc_tag.s,
-			    new_rec->td.id.loc_tag.len);
-			new_rec->td.loc_seq.value = rec->td.loc_seq.value;
-			new_rec->last_register_sent = rec->last_register_sent;
-			new_rec->registration_timeout = rec->registration_timeout;
-			new_rec->state = rec->state;
-		}
-
-		return 1;
-	} else
-		return 0;  /* continue search */
-}
-
-int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
-	record_coords_t *coords)
+int add_record(uac_reg_map_t *uac, str *now, unsigned int plist)
 {
 	reg_record_t *record;
 	unsigned int size;
@@ -161,32 +128,22 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 	str call_id_ftag;
 	char *p;
 	slinkedl_list_t *list;
-	slinkedl_element_t *new_elem = NULL;
 
 	/* Reserve space for record */
 	size = sizeof(reg_record_t) + MD5_LEN +
 		uac->to_uri.len + uac->from_uri.len + uac->registrar_uri.len +
 		uac->auth_user.len + uac->auth_password.len +
 		uac->contact_uri.len + uac->contact_params.len + uac->proxy_uri.len +
-		uac->cluster_shtag.len;
+		uac->cluster_shtag.len + uac->server_expiry.len + uac->proxy_uri.len + uac->from_uri.len;
 
-	if (mode == REG_DB_LOAD_RECORD) {
-		new_elem = slinkedl_new_element(&reg_alloc, size, (void**)&record);
-		if (!new_elem) {
-			LM_ERR("oom\n");
-			return -1;
-		}
-	} else {
-		if(mode==REG_DB_LOAD) list = reg_htable[uac->hash_code].p_list;
-		else list = reg_htable[uac->hash_code].s_list;
+	if(plist==0) list = reg_htable[uac->hash_code].p_list;
+	else list = reg_htable[uac->hash_code].s_list;
 
-		record = (reg_record_t*)slinkedl_append(list, size);
-		if(!record) {
-			LM_ERR("oom\n");
-			return -1;
-		}
+	record = (reg_record_t*)slinkedl_append(list, size);
+	if(!record) {
+		LM_ERR("oom\n");
+		return -1;
 	}
-
 	memset(record, 0, size);
 
 	record->expires = uac->expires;
@@ -226,16 +183,31 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		p += uac->proxy_uri.len;
 	}
 
+	/////////////////////Always take from URI from aor and not from third party registrant////////////////////
 	/* Setting the local URI */
+	if(td->rem_uri.s && td->rem_uri.len) {
+		LM_DBG("got from [%.*s]\n", td->rem_uri.len, td->rem_uri.s);
+		td->loc_uri.s = p;
+		td->loc_uri.len = td->rem_uri.len;
+		memcpy(p, td->rem_uri.s, td->rem_uri.len);
+		p += td->rem_uri.len;
+	} else {
+		
+		td->loc_uri.s = td->rem_uri.s;
+		td->loc_uri.len = td->rem_uri.len;
+	}
+	////////////////////////////////////////
+	
+	/* Setting third party registrant from database */
 	if(uac->from_uri.s && uac->from_uri.len) {
 		LM_DBG("got from [%.*s]\n", uac->from_uri.len, uac->from_uri.s);
-		td->loc_uri.s = p;
-		td->loc_uri.len = uac->from_uri.len;
+		record->third_party_registrant.s = p;
+		record->third_party_registrant.len = uac->from_uri.len;
 		memcpy(p, uac->from_uri.s, uac->from_uri.len);
 		p += uac->from_uri.len;
 	} else {
-		td->loc_uri.s = td->rem_uri.s;
-		td->loc_uri.len = td->rem_uri.len;
+		record->third_party_registrant.s = td->rem_uri.s;
+		record->third_party_registrant.len = td->rem_uri.len;
 	}
 
 	/* Setting the Remote target URI */
@@ -264,6 +236,20 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 		record->auth_user.len = uac->auth_user.len;
 		memcpy(p, uac->auth_user.s, uac->auth_user.len);
 		p += uac->auth_user.len;
+	}
+	
+	if (uac->server_expiry.s && uac->server_expiry.len) {
+		record->server_expiry.s = p;
+		record->server_expiry.len = uac->server_expiry.len;
+		memcpy(p, uac->server_expiry.s, uac->server_expiry.len);
+		p += uac->server_expiry.len;
+	}
+	
+	if (uac->proxy_uri.s && uac->proxy_uri.len) {
+		record->proxy_uri.s = p;
+		record->proxy_uri.len = uac->proxy_uri.len;
+		memcpy(p, uac->proxy_uri.s, uac->proxy_uri.len);
+		p += uac->proxy_uri.len;
 	}
 
 	if (uac->auth_password.s && uac->auth_password.len) {
@@ -296,14 +282,6 @@ int add_record(uac_reg_map_t *uac, str *now, unsigned int mode,
 
 	/* Setting the flags */
 	record->flags = uac->flags;
-
-	if (mode == REG_DB_LOAD_RECORD) {
-		coords->extra = (void*)(unsigned long)uac->hash_code;
-		if (slinkedl_replace(reg_htable[uac->hash_code].p_list,
-			match_reload_record, coords, new_elem) == 0)
-			/* this is a new record altogether */
-			slinkedl_append_element(reg_htable[uac->hash_code].p_list, new_elem);
-	}
 
 	reg_print_record(record);
 
