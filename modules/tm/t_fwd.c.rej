@@ -1,0 +1,10 @@
+diff a/modules/tm/t_fwd.c b/modules/tm/t_fwd.c	(rejected hunks)
+@@ -1019,7 +1020,7 @@ int t_inject_branch( struct cell *t, struct sip_msg *msg, int flags)
+ 	static struct sip_msg faked_req;
+ 	branch_bm_t cancel_bm = 0;
+ 	str reason = str_init(CANCEL_REASON_200);
+-	int rc;
++	int b, rc;
+ 
+ 	/* does the transaction state still accept new branches ? */
+ 	if (t->uas.status >= 200) {
