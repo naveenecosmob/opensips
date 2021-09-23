@@ -31,7 +31,21 @@
 #include "../tm//tm_load.h"
 #include "../../ut.h"
 
-#define SIPREC_SESSION_VERSION 0
+#define srec_hlog(_params ...)
+#ifdef DBG_SIPREC_HIST
+#ifdef DBG_STRUCT_HIST
+#include  "../../lib/dbg/struct_hist.h"
+#undef srec_hlog
+#define srec_hlog(_sess, _verb, _msg) \
+	 sh_log((_sess)->hist, _verb, _msg " (ref=%d)", (_sess)->ref)
+extern struct struct_hist_list *srec_hist;
+#else
+#warning "'DBG_SIPREC_HIST' flag not possible, because 'DBG_STRUCT_HIST' is not on"
+#undef DBG_SIPREC_HIST
+#endif
+#endif
+
+#define SIPREC_SESSION_VERSION 1
 #define SRC_MAX_PARTICIPANTS 2
 /* Uncomment this to enable SIPREC debugging
 #define SIPREC_DEBUG_REF
@@ -63,6 +77,7 @@ struct src_part {
 
 #define SIPREC_STARTED	(1<<0)
 #define SIPREC_DLG_CBS	(1<<1)
+
 #define SIPREC_ONGOING	(1<<2)
 
 #define SIPREC_SRS(_s) (list_entry((_s)->srs.next, struct srs_node, list)->uri)
@@ -73,6 +88,7 @@ struct src_sess {
 	time_t ts;
 	int version;
 	int streams_no;
+	int streams_inactive;
 	str rtpproxy;
 	str media_ip;
 	str headers;
@@ -100,9 +116,12 @@ struct src_sess {
 	str b2b_fromtag;
 	str b2b_totag;
 	str b2b_callid;
+
+#ifdef DBG_SIPREC_HIST
+	struct struct_hist *hist;
+#endif
 };
 
-void src_unref_session(void *p);
 struct src_sess *src_new_session(str *srs, str *rtp, str *m_ip, str *group,
 		str *hdrs, struct socket_info *si);
 void src_free_session(struct src_sess *sess);

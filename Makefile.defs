@@ -65,6 +65,7 @@ MAIN_NAME=opensips
 
 #version number
 VERSION_MAJOR = 3
+
 VERSION_MINOR = 2
 VERSION_SUBMINOR = 2
 VERSION_BUILD =
@@ -345,8 +346,8 @@ CROSS_COMPILE ?=
 SYSBASE ?= /usr
 
 # dirs
-cfg_dir = etc/$(MAIN_NAME)/
-bin_dir = sbin/
+cfg_dir ?= etc/$(MAIN_NAME)/
+bin_dir ?= sbin/
 
 ARCH_B = $(shell echo $(ARCH) | sed -e 's/.*64.*/64b/')
 ifeq ($(OS),freebsd)

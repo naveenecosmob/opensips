@@ -48,6 +48,9 @@
 #include "../clusterer/api.h"
 #include "../../forward.h"
 
+#define RL_PIPE_REPLICATE_BIN	(1<<0) /* replicate the pipe over bin */
+#define RL_PIPE_REPLICATE_CACHE	(1<<1) /* replicate the pipe over cache */
+
 /* copied from old ratelimit module */
 typedef enum {
 	PIPE_ALGO_NOP = 0,
@@ -80,6 +83,7 @@ typedef struct rl_pipe {
 #ifdef RL_DEBUG_PIPES
 	str name;
 #endif
+	unsigned int flags;			/* pipe's flags */
 	int limit;					/* limit used by algorithm */
 	int counter;				/* countes the accesses */
 	int my_counter;				/* countes the accesses of this instance */
@@ -134,7 +138,7 @@ int w_rl_check(struct sip_msg*, str *, int *, str *);
 int w_rl_dec(struct sip_msg*, str *);
 int w_rl_reset(struct sip_msg*, str *);
 int w_rl_set_count(str, int);
-int rl_stats(mi_item_t *, str *);
+int rl_stats(mi_item_t *, str *, str *, int);
 int rl_pipe_check(rl_pipe_t *);
 int rl_get_counter_value(str *);
 /* update load */

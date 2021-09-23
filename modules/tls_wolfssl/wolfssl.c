@@ -79,7 +79,9 @@ int _wolfssl_tls_var_alt(int ind, void *ssl, str *res);
 int _wolfssl_tls_var_check_cert(int ind, void *ssl, str *str_res, int *int_res);
 int _wolfssl_tls_var_validity(int ind, void *ssl, str *res);
 
+
 _wolfssl_method_f ssl_methods[SSL_VERSIONS_SIZE];
+
 
 static cmd_export_t cmds[] = {
 	{"load_tls_wolfssl", (cmd_function)load_tls_wolfssl,
@@ -116,6 +118,7 @@ static void _wolfssl_init_ssl_methods(void)
 	ssl_methods[TLS_USE_TLSv1-1] = wolfTLSv1_method;
 	ssl_methods[TLS_USE_TLSv1_2-1] = wolfTLSv1_2_method;
 	ssl_methods[TLS_USE_TLSv1_3-1] = wolfTLSv1_3_method;
+
 }
 
 static void *oss_malloc(size_t size)

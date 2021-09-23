@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fnmatch.h>
 
 #include "ratelimit.h"
 
@@ -82,7 +83,12 @@ static str pipe_repl_cap = str_init("ratelimit-pipe-repl");
 
 /* returns true if the pipe should use cachedb interface */
 #define RL_USE_CDB(_p) \
-	(cdbc && (_p)->algo!=PIPE_ALGO_NETWORK && (_p)->algo!=PIPE_ALGO_FEEDBACK)
+	(cdbc && (_p)->algo!=PIPE_ALGO_NETWORK && \
+	 (_p)->algo!=PIPE_ALGO_FEEDBACK && \
+	 (_p)->flags&RL_PIPE_REPLICATE_CACHE)
+
+#define RL_USE_BIN(_p) \
+	 ((_p)->flags&RL_PIPE_REPLICATE_BIN)
 
 
 
@@ -306,7 +312,7 @@ static str * get_rl_algo_name(rl_algo_t algo)
 	return NULL;
 }
 
-rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name)
+rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name, unsigned flags)
 {
 	rl_pipe_t *pipe;
 	int size = sizeof(rl_pipe_t);
@@ -320,6 +326,24 @@ rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name)
 #ifdef RL_DEBUG_PIPES
 	size += name->len;
 #endif
+	if (flags & RL_PIPE_REPLICATE_CACHE) {
+		if (!cdbc) {
+			LM_WARN("cachedb replication not configured! ignoring...\n");
+			flags &= ~RL_PIPE_REPLICATE_CACHE;
+		}
+		if (algo == PIPE_ALGO_NETWORK ||
+				algo == PIPE_ALGO_FEEDBACK) {
+			LM_WARN("cachedb replication not possible for "
+					"NETWORK and FEEDBACK algorithms!\n");
+			flags &= ~RL_PIPE_REPLICATE_CACHE;
+		}
+	}
+	if (flags & RL_PIPE_REPLICATE_BIN) {
+		if (!rl_repl_cluster) {
+			LM_WARN("clusterer replication not configured! ignoring...\n");
+			flags &= ~RL_PIPE_REPLICATE_BIN;
+		}
+	}
 
 	pipe = shm_malloc(size);
 	if (!pipe) {
@@ -330,6 +354,7 @@ rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name)
 
 	pipe->algo = algo;
 	pipe->limit = limit;
+	pipe->flags = flags;
 
 	if (algo == PIPE_ALGO_HISTORY) {
 		pipe->rwin.window = (long int *)(pipe + 1);
@@ -345,13 +370,47 @@ rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name)
 	return pipe;
 }
 
+static inline void parse_pipe_name(str *name, str *pipe_name, unsigned *flags)
+{
+	char *c;
+	*flags = 0;
+	*pipe_name = *name;
+	if (name->len < 2)
+		return;
+	for (c = &name->s[name->len - 1]; c > name->s; c--) {
+		switch (*c) {
+			case 'r':
+				*flags |= RL_PIPE_REPLICATE_CACHE;
+				break;
+			case 'b':
+				*flags |= RL_PIPE_REPLICATE_BIN;
+				break;
+			case '/':
+				if (*flags) {
+					pipe_name->len = c - pipe_name->s;
+					trim(pipe_name);
+				}
+				/* fall back */
+			default:
+				if (pipe_name->len == name->len)
+					*flags = 0;
+				/* not flags - something else at the end */
+				return;
+		}
+	}
+}
+
 int w_rl_check(struct sip_msg *_m, str *name, int *limit, str *algorithm)
 {
 	int ret = 1, should_update = 0;
 	unsigned int hash_idx;
 	rl_pipe_t **pipe;
+	str pipe_name;
+	unsigned flags;
 
 	rl_algo_t algo = -1;
+
+	parse_pipe_name(name, &pipe_name, &flags);
 
 	if (!algorithm || (algo = get_rl_algo(*algorithm)) == PIPE_ALGO_NOP) {
 		algo = PIPE_ALGO_NOP;
@@ -380,11 +439,11 @@ int w_rl_check(struct sip_msg *_m, str *name, int *limit, str *algorithm)
 		lock_release(rl_lock);
 	}
 
-	hash_idx = RL_GET_INDEX(*name);
+	hash_idx = RL_GET_INDEX(pipe_name);
 	RL_GET_LOCK(hash_idx);
 
 	/* try to get the value */
-	pipe = RL_GET_PIPE(hash_idx, *name);
+	pipe = RL_GET_PIPE(hash_idx, pipe_name);
 	if (!pipe) {
 		LM_ERR("cannot get the index\n");
 		goto release;
@@ -392,30 +451,36 @@ int w_rl_check(struct sip_msg *_m, str *name, int *limit, str *algorithm)
 
 	if (!*pipe) {
 		/* allocate new pipe */
-		if (!(*pipe = rl_create_pipe(*limit, algo, name)))
+		if (!(*pipe = rl_create_pipe(*limit, algo, &pipe_name, flags)))
 			goto release;
 
 		LM_DBG("Pipe %.*s doesn't exist, but was created %p\n",
-				name->len, name->s, *pipe);
+				pipe_name.len, pipe_name.s, *pipe);
 		if ((*pipe)->algo == PIPE_ALGO_NETWORK)
 			should_update = 1;
 		(*pipe)->last_local_used = time(0);
 	} else {
 		LM_DBG("Pipe %.*s found: %p - last used %lu\n",
-			name->len, name->s, *pipe, (*pipe)->last_used);
+			pipe_name.len, pipe_name.s, *pipe, (*pipe)->last_used);
 		if (algo != PIPE_ALGO_NOP && (*pipe)->algo != algo) {
 			LM_WARN("algorithm %d different from the initial one %d for pipe "
-				"%.*s\n", algo, (*pipe)->algo, name->len, name->s);
+				"%.*s\n", algo, (*pipe)->algo, pipe_name.len, pipe_name.s);
 		}
 		/* update the limit */
 		(*pipe)->limit = *limit;
+		if ((*pipe)->flags != flags) {
+			LM_DBG("updating %.*s pipe flags from %x to %x\n",
+					pipe_name.len, pipe_name.s, (*pipe)->flags,
+					((*pipe)->flags | flags));
+			(*pipe)->flags |= flags; /* also update the flags */
+		}
 	}
 
 	/* set the last used time */
 	(*pipe)->last_used = time(0);
 	if (RL_USE_CDB(*pipe)) {
 		/* release the counter for a while */
-		if (rl_change_counter(name, *pipe, 1) < 0) {
+		if (rl_change_counter(&pipe_name, *pipe, 1) < 0) {
 			LM_ERR("cannot increase counter\n");
 			goto release;
 		}
@@ -425,7 +490,7 @@ int w_rl_check(struct sip_msg *_m, str *name, int *limit, str *algorithm)
 
 	ret = rl_pipe_check(*pipe);
 	LM_DBG("Pipe %.*s counter:%d load:%d limit:%d should %sbe blocked (%p)\n",
-		name->len, name->s, (*pipe)->counter, (*pipe)->load,
+		pipe_name.len, pipe_name.s, (*pipe)->counter, (*pipe)->load,
 		(*pipe)->limit, ret == 1 ? "NOT " : "", *pipe);
 
 
@@ -488,6 +553,7 @@ void rl_timer(unsigned int ticks, void *param)
 			}
 			/* check to see if it is expired */
 			if (((*pipe)->last_local_used + rl_expire_time < now) &&
+
 				((*pipe)->last_used + rl_expire_time + rl_timer_interval < now)) {
 				/* this pipe is engaged in a transaction */
 				del = it;
@@ -591,18 +657,50 @@ static int rl_map_print(void *param, str key, void *value)
 	return 0;
 }
 
-static int rl_map_print_array(void *param, str key, void *value)
+static int rl_map_print_array(void *extras, str key, void *value)
 {
-	mi_item_t *pipe_item = add_mi_object((mi_item_t *)param, NULL, 0);
+	mi_item_t *pipe_item = add_mi_object((mi_item_t *)(((void**)extras)[0]),
+		NULL, 0);
 	if (!pipe_item)
 		return -1;
-	return rl_map_print(pipe_item, key, value);
+	return rl_map_print(pipe_item, key, value );
 }
 
-int rl_stats(mi_item_t *resp_obj, str * value)
+static int rl_map_print_array_filter(void *extras, str key, void *value)
+{
+	static str nt_key = {NULL,0};
+	mi_item_t *pipe_item;
+	char *filter_s = (char*)(((void**)extras)[1]);
+	int filter_out = (int)(long)(((void**)extras)[2]);
+
+	/* make the key null terminated */
+	if (pkg_str_extend( &nt_key, key.len+1))
+		return -1;
+	memcpy( nt_key.s, key.s, key.len);
+	nt_key.s[key.len] = 0;
+
+	if ( fnmatch( filter_s, nt_key.s, 0)!=0 ) {
+		if (filter_out==0)
+			return 0;
+	} else {
+		if (filter_out==1)
+			return 0;
+	}
+
+	pipe_item = add_mi_object((mi_item_t *)(((void**)extras)[0]), NULL, 0);
+	if (!pipe_item)
+		return -1;
+
+	return rl_map_print(pipe_item, key, value );
+}
+
+int rl_stats(mi_item_t *resp_obj, str * value, str *filter, int filter_out)
 {
 	mi_item_t *pipe_item, *pipe_arr;
 	rl_pipe_t **pipe;
+	void *extras[3];
+	char *filter_s;
+	process_each_func func;
 	int i;
 
 	if (value && value->s && value->len) {
@@ -628,11 +726,25 @@ int rl_stats(mi_item_t *resp_obj, str * value)
 		pipe_arr = add_mi_array(resp_obj, MI_SSTR("Pipes"));
 		if (!pipe_arr)
 			return -1;
+		extras[0] = pipe_arr;
+		if (filter && filter->s && filter->len) {
+			// make filter NULL terminated
+			filter_s = (char*)pkg_malloc( filter->len+1 );
+			if (!filter_s)
+				return -1;
+			memcpy( filter_s, filter->s, filter->len);
+			filter_s[filter->len] = 0;
+			extras[1] = filter_s;
+			extras[2] = (void*)(long)filter_out;
+			func = rl_map_print_array_filter;
+		} else {
+			func = rl_map_print_array;
+		}
 		for (i = 0; i < rl_htable.size; i++) {
 			if (map_size(rl_htable.maps[i]) == 0)
 				continue;
 			RL_GET_LOCK(i);
-			if (map_for_each(rl_htable.maps[i], rl_map_print_array, pipe_arr)) {
+			if (map_for_each(rl_htable.maps[i], func, (void*)extras)) {
 				LM_ERR("cannot print values\n");
 				goto error;
 			}
@@ -743,7 +855,7 @@ void rl_rcv_bin(bin_packet_t *packet)
 	int counter;
 	str name;
 	rl_pipe_t **pipe;
-	unsigned int hash_idx;
+	unsigned int hash_idx, flags;
 	time_t now;
 	rl_repl_counter_t *destination;
 
@@ -758,6 +870,11 @@ void rl_rcv_bin(bin_packet_t *packet)
 	for (;;) {
 		if (bin_pop_str(packet, &name) == 1)
 			break; /* pop'ed all pipes */
+
+		if (bin_pop_int(packet, &flags) < 0) {
+			LM_ERR("cannot pop pipe's flags\n");
+			return;
+		}
 
 		if (bin_pop_int(packet, &algo) < 0) {
 			LM_ERR("cannot pop pipe's algorithm\n");
@@ -786,7 +903,7 @@ void rl_rcv_bin(bin_packet_t *packet)
 
 		if (!*pipe) {
 			/* if the pipe does not exist, allocate it in case we need it later */
-			if (!(*pipe = rl_create_pipe(limit, algo, &name)))
+			if (!(*pipe = rl_create_pipe(limit, algo, &name, flags)))
 				goto release;
 			LM_DBG("Pipe %.*s doesn't exist, but was created %p\n",
 				name.len, name.s, *pipe);
@@ -938,7 +1055,11 @@ void rl_timer_repl(utime_t ticks, void *param)
 				goto next_pipe;
 			}
 			/* ignore cachedb replicated stuff */
-			if (RL_USE_CDB(*pipe))
+			if (!RL_USE_BIN(*pipe))
+				goto next_pipe;
+
+			/* do not replicate if about to expire */
+			if ((*pipe)->last_local_used + rl_expire_time < now)
 				goto next_pipe;
 
 			/* do not replicate if about to expire */
@@ -952,6 +1073,9 @@ void rl_timer_repl(utime_t ticks, void *param)
 			}
 
 			if (bin_push_str(&packet, key) < 0)
+				goto error;
+
+			if (bin_push_int(&packet, (*pipe)->flags) < 0)
 				goto error;
 
 			if (bin_push_int(&packet, (*pipe)->algo) < 0)

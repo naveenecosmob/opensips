@@ -33,10 +33,12 @@
 #define REPLICATION_DLG_DELETED		3
 #define REPLICATION_DLG_CSEQ		4
 
+
 #define DLG_BIN_V3      3
 #define DLG_BIN_V4      4
 
 #define BIN_VERSION DLG_BIN_V4
+
 
 extern int dialog_repl_cluster;
 extern int profile_repl_cluster;

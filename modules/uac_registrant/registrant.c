@@ -360,7 +360,7 @@ int run_reg_tm_cback(void *e_data, void *data, void *r_data)
 			}
 				
 				if (msg->contact) {
-					c_ptr = msg->contact;
+					c_ptr = msg->contact
 					while(c_ptr) {
 						if (c_ptr->type == HDR_CONTACT_T) {
 							if (!c_ptr->parsed && (parse_contact(c_ptr)<0)) {
