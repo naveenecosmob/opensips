@@ -94,6 +94,7 @@ static mi_response_t *mi_reg_reload(const mi_params_t *params,
 int send_register(unsigned int hash_index, reg_record_t *rec, str *auth_hdr);
 int send_unregister(unsigned int hash_index, reg_record_t *rec, str *auth_hdr);
 
+
 /** Global variables */
 
 uac_auth_api_t uac_auth_api;
@@ -1214,3 +1215,4 @@ error:
 	}
 	return NULL;
 }
+

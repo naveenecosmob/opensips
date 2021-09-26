@@ -160,7 +160,7 @@ static int gw_status_update(bin_packet_t *packet, int raise_event)
 	bin_pop_int(packet, &flags);
 
 	part = get_partition( &part_name );
-	if (part==NULL)
+	if (part==NULL || part->rdata==NULL)
 		return -1;
 
 	lock_start_read(part->ref_lock);
@@ -197,7 +197,7 @@ static int cr_status_update(bin_packet_t *packet)
 	bin_pop_int(packet, &flags);
 
 	part = get_partition( &part_name );
-	if (part==NULL)
+	if (part==NULL || part->rdata==NULL)
 		return -1;
 
 	lock_start_read(part->ref_lock);
@@ -339,6 +339,9 @@ void receive_dr_cluster_event(enum clusterer_event ev, int node_id)
 
 int dr_cluster_sync(void)
 {
+	if (!dr_cluster_id)
+		return 0;
+
 	if (c_api.request_sync(&status_repl_cap, dr_cluster_id) < 0) {
 		LM_ERR("Sync request failed\n");
 		return -1;
@@ -376,9 +379,6 @@ int dr_init_cluster(void)
 	} else {
 		dr_cluster_shtag.len = 0;
 	}
-
-	if (dr_cluster_sync() < 0)
-		return -1;
 
 	return 0;
 }

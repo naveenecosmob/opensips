@@ -302,6 +302,7 @@ int internal_fork(char *proc_desc, unsigned int flags,
 		pt[process_no].load_1m->flags &= (~STAT_HIDDEN);
 		pt[process_no].load_10m->flags &= (~STAT_HIDDEN);
 		#ifdef PKG_MALLOC
+		pt[process_no].pkg_total->flags &= (~STAT_HIDDEN);
 		pt[process_no].pkg_used->flags &= (~STAT_HIDDEN);
 		pt[process_no].pkg_rused->flags &= (~STAT_HIDDEN);
 		pt[process_no].pkg_mused->flags &= (~STAT_HIDDEN);
@@ -408,10 +409,10 @@ void dynamic_process_final_exit(void)
 	/* if a TCP proc by chance, reset the tcp-related data */
 	tcp_reset_worker_slot();
 
-	/* mark myself as DYNAMIC (just in case) to have an err-less terminatio */
+	/* mark myself as DYNAMIC (just in case) to have an err-less termination */
 	pt[process_no].flags |= OSS_PROC_SELFEXIT;
 	LM_INFO("doing self termination\n");
 
-	/* the process slot in the proc table will be purge on SIGCHLG by main */
+	/* the process slot in the proc table will be purge on SIGCHLD by main */
 	exit(0);
 }

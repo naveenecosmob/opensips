@@ -177,11 +177,15 @@ is statically allocated, it will be modified at each function call
 	{
 		static char l[ASCIILINESZ+1];
 		char * last ;
+		int len;
 
 		if (s==NULL) return NULL ;
 		memset(l, 0, ASCIILINESZ+1);
+		len = strlen(s);
+		if (len > ASCIILINESZ) return NULL;
+
 		strcpy(l, s);
-		last = l + strlen(l);
+		last = l + len;
 		while (last > l) {
 			if (!isspace((int)*(last-1)))
 			break ;
@@ -546,7 +550,7 @@ output file pointers.
 
 	/* iniparser.c.c following */
 #define ASCIILINESZ         1024
-#define LONGKEYBUFF         2*ASCIILINESZ+1
+#define LONGKEYBUFF         (2*ASCIILINESZ +1/*:*/ +1/*'\0'*/)
 #define INI_INVALID_KEY     ((char*)-1)
 
 	/* Private: add an entry to the dictionary */
@@ -565,7 +569,8 @@ output file pointers.
 			size_t len = strlen(sec);
 			if (len > LONGKEYBUFF - 1)
 				len = LONGKEYBUFF - 1;
-			strncpy(longkey, sec, len + 1);
+			memcpy(longkey, sec, len);
+			longkey[len] = 0;
 		}
 
 		/* Add (key,val) to dictionary */

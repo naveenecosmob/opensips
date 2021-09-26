@@ -59,6 +59,7 @@
 #include "mod_fix.h"
 #include "script_var.h"
 #include "xlog.h"
+#include "cfg_pp.h"
 
 #include <string.h>
 
@@ -68,15 +69,13 @@
 
 int action_flags = 0;
 int return_code  = 0;
-int max_while_loops = 100;
+int max_while_loops = 10000;
 
 /* script tracing options  */
 int use_script_trace = 0;
 int script_trace_log_level = L_ALERT;
 char *script_trace_info = NULL;
 pv_elem_t script_trace_elem;
-
-static int rec_lev=0;
 
 extern err_info_t _oser_err_info;
 
@@ -88,13 +87,18 @@ struct route_params_level {
 	void *extra; /* extra params used */
 	param_getf_t get_param;
 };
-static struct route_params_level route_params[MAX_REC_LEV];
+static struct route_params_level route_params[ROUTE_MAX_REC_LEV];
 static int route_rec_level = -1;
+
+char *route_stack[ROUTE_MAX_REC_LEV + 1];
+int route_stack_size;
 
 int curr_action_line;
 char *curr_action_file;
 
 static int for_each_handler(struct sip_msg *msg, struct action *a);
+static int route_param_get(struct sip_msg *msg,  pv_param_t *ip,
+		pv_value_t *res, void *params, void *extra);
 
 
 /* run actions from a route */
@@ -102,19 +106,21 @@ static int for_each_handler(struct sip_msg *msg, struct action *a);
 /* (0 if drop or break encountered, 1 if not ) */
 static inline int run_actions(struct action* a, struct sip_msg* msg)
 {
-	int ret;
+	int ret, has_name;
+	str top_route;
 
-	rec_lev++;
-	if (rec_lev>ROUTE_MAX_REC_LEV){
-		LM_ERR("too many recursive routing table lookups (%d) giving up!\n",
-			rec_lev);
+	if (route_stack_size > ROUTE_MAX_REC_LEV) {
+		get_top_route_type(&top_route, &has_name);
+		LM_ERR("route recursion limit reached, giving up! (nested routes: %d, "
+		           "first: '%.*s', last: '%s')!\n", route_stack_size,
+		        top_route.len, top_route.s, route_stack[ROUTE_MAX_REC_LEV]);
 		ret=E_UNSPEC;
 		goto error;
 	}
 
 	if (a==0){
-		LM_WARN("null action list (rec_level=%d)\n",
-			rec_lev);
+		LM_WARN("null action list (route stack size: %d)\n",
+		        route_stack_size);
 		ret=1;
 		goto error;
 	}
@@ -125,26 +131,44 @@ static inline int run_actions(struct action* a, struct sip_msg* msg)
 	if(action_flags&ACT_FL_RETURN)
 		action_flags &= ~ACT_FL_RETURN;
 
-	rec_lev--;
 	return ret;
 
 error:
-	rec_lev--;
 	return ret;
 }
 
 
-/* run the error route with correct handling - simpler wrapper to
-   allow the usage from other parts of the code */
-void run_error_route(struct sip_msg* msg, int force_reset)
+int _run_actions(struct action *a, struct sip_msg *msg)
+{
+	return run_actions(a, msg);
+}
+
+
+int inside_error_route;
+void run_error_route(struct sip_msg* msg, int init_route_stack)
 {
 	int old_route;
+
 	LM_DBG("triggering\n");
-	swap_route_type(old_route, ERROR_ROUTE);
-	run_actions(sroutes->error.a, msg);
+	inside_error_route = 1;
+
+	if (init_route_stack) {
+		swap_route_type(old_route, ERROR_ROUTE);
+
+		route_stack[0] = NULL;
+		route_stack_size = 1;
+
+		run_actions(sroutes->error.a, msg);
+		set_route_type(old_route);
+	} else {
+		route_params_push_level("!error_route", NULL, 0, route_param_get);
+		run_actions(sroutes->error.a, msg);
+		route_params_pop_level();
+	}
+
 	/* reset error info */
 	init_err_info();
-	set_route_type(old_route);
+	inside_error_route = 0;
 }
 
 
@@ -161,8 +185,8 @@ int run_action_list(struct action* a, struct sip_msg* msg)
 
 		/* check for errors */
 		if (_oser_err_info.eclass!=0 && sroutes->error.a!=NULL &&
-		(route_type&(ERROR_ROUTE|ONREPLY_ROUTE|LOCAL_ROUTE))==0 )
-			run_error_route(msg,0);
+		(route_type&(ONREPLY_ROUTE|LOCAL_ROUTE))==0 && !inside_error_route)
+			run_error_route(msg, 0);
 
 		/* continue or not ? */
 		if (action_flags & (ACT_FL_RETURN | ACT_FL_EXIT | ACT_FL_BREAK))
@@ -171,61 +195,16 @@ int run_action_list(struct action* a, struct sip_msg* msg)
 	return ret;
 }
 
-int run_top_route_get_code(struct action*a, struct sip_msg *msg, int *code_ret)
+
+int run_top_route(struct script_route sr, struct sip_msg* msg)
 {
 	int bk_action_flags;
-	int bk_rec_lev;
-	int ret, cret;
-	context_p ctx = NULL;
-
-	bk_action_flags = action_flags;
-	bk_rec_lev = rec_lev;
-
-	action_flags = 0;
-	rec_lev = 0;
-	init_err_info();
-
-	if (current_processing_ctx==NULL) {
-		if ( (ctx=context_alloc(CONTEXT_GLOBAL))==NULL) {
-			LM_ERR("failed to allocated new global context\n");
-			return -1;
-		}
-		memset( ctx, 0, context_size(CONTEXT_GLOBAL));
-		current_processing_ctx = ctx;
-	}
-
-	cret = run_actions(a, msg);
-	if (code_ret)
-		*code_ret = cret;
-
-	ret = action_flags;
-
-	action_flags = bk_action_flags;
-	rec_lev = bk_rec_lev;
-	/* reset script tracing */
-	use_script_trace = 0;
-
-	if (ctx && current_processing_ctx) {
-		context_destroy(CONTEXT_GLOBAL, ctx);
-		context_free(ctx);
-		current_processing_ctx = NULL;
-	}
-
-	return ret;
-}
-
-int run_top_route(struct action* a, struct sip_msg* msg)
-{
-	int bk_action_flags;
-	int bk_rec_lev;
 	int ret;
 	context_p ctx = NULL;
 
 	bk_action_flags = action_flags;
-	bk_rec_lev = rec_lev;
 
 	action_flags = 0;
-	rec_lev = 0;
 	init_err_info();
 
 	if (current_processing_ctx==NULL) {
@@ -237,11 +216,19 @@ int run_top_route(struct action* a, struct sip_msg* msg)
 		current_processing_ctx = ctx;
 	}
 
-	run_actions(a, msg);
+	if (route_type & (ERROR_ROUTE|LOCAL_ROUTE|STARTUP_ROUTE) ||
+	     (route_type &
+	        (REQUEST_ROUTE|ONREPLY_ROUTE) && !strcmp(sr.name, "0")))
+		route_stack[0] = NULL;
+	else
+		route_stack[0] = sr.name;
+
+	route_stack_size = 1;
+
+	run_actions(sr.a, msg);
 	ret = action_flags;
 
 	action_flags = bk_action_flags;
-	rec_lev = bk_rec_lev;
 	/* reset script tracing */
 	use_script_trace = 0;
 
@@ -600,7 +587,7 @@ int do_action(struct action* a, struct sip_msg* msg)
 								set_err_info(OSER_EC_ASSERT, OSER_EL_CRITIC, "assertion failed");
 								set_err_reply(500, "server error");
 
-								run_error_route(msg,0);
+								run_error_route(msg, 0);
 							}
 						}
 					}
@@ -670,6 +657,7 @@ int do_action(struct action* a, struct sip_msg* msg)
 			ret=1;
 			break;
 		case ROUTE_T:
+			init_str(&sval, "unknown");
 			switch (a->elem[0].type) {
 				case NUMBER_ST:
 					i = a->elem[0].u.number;
@@ -699,7 +687,7 @@ int do_action(struct action* a, struct sip_msg* msg)
 					break;
 			}
 			if (i == -1) {
-				LM_ALERT("BUG in route() type %d\n",
+				LM_ALERT("unknown route(%.*s) (type %d)\n", sval.len, sval.s,
 						a->elem[0].type);
 				ret=E_BUG;
 				break;
@@ -719,12 +707,12 @@ int do_action(struct action* a, struct sip_msg* msg)
 					ret=E_BUG;
 					break;
 				}
-				route_params_push_level(a->elem[2].u.data,
+				route_params_push_level(sroutes->request[i].name, a->elem[2].u.data,
 						(void*)(unsigned long)a->elem[1].u.number, route_param_get);
 				return_code=run_actions(sroutes->request[i].a, msg);
 				route_params_pop_level();
 			} else {
-				route_params_push_level(NULL, 0, route_param_get);
+				route_params_push_level(sroutes->request[i].name, NULL, 0, route_param_get);
 				return_code=run_actions(sroutes->request[i].a, msg);
 				route_params_pop_level();
 			}
@@ -774,7 +762,8 @@ int do_action(struct action* a, struct sip_msg* msg)
 				{
 					if(len++ >= max_while_loops)
 					{
-						LM_INFO("max while loops are encountered\n");
+						LM_ERR("max while loops reached (%d), increase the "
+						       "'max_while_loops' global!\n", max_while_loops);
 						break;
 					}
 					v=eval_expr((struct expr*)a->elem[0].u.data, msg, 0);
@@ -964,8 +953,8 @@ int do_action(struct action* a, struct sip_msg* msg)
 
 			if ((ret = get_cmd_fixups(msg, cmd->params, a->elem, cmdp,
 				tmp_vals)) < 0) {
-				LM_ERR("Failed to get fixups for command <%s>\n",
-					cmd->name);
+				LM_ERR("Failed to get fixups for command <%s> in %s, line %d\n",
+					cmd->name, a->file, a->line);
 				break;
 			}
 
@@ -975,8 +964,8 @@ int do_action(struct action* a, struct sip_msg* msg)
 				cmdp[6],cmdp[7]);
 
 			if (free_cmd_fixups(cmd->params, a->elem, cmdp) < 0) {
-				LM_ERR("Failed to free fixups for command <%s>\n",
-					cmd->name);
+				LM_ERR("Failed to free fixups for command <%s> in %s, line %d\n",
+					cmd->name, a->file, a->line);
 				break;
 			}
 
@@ -997,8 +986,8 @@ int do_action(struct action* a, struct sip_msg* msg)
 
 				if ((ret = get_cmd_fixups(msg, acmd->params, aitem->elem, cmdp,
 					tmp_vals)) < 0) {
-					LM_ERR("Failed to get fixups for async command <%s>\n",
-						acmd->name);
+					LM_ERR("Failed to get fixups for async command <%s> in %s,"
+					       " line %d\n", acmd->name, a->file, a->line);
 					break;
 				}
 
@@ -1008,8 +997,8 @@ int do_action(struct action* a, struct sip_msg* msg)
 					action_flags |= ACT_FL_TBCONT;
 
 				if (free_cmd_fixups(acmd->params, aitem->elem, cmdp) < 0) {
-					LM_ERR("Failed to free fixups for command <%s>\n",
-						acmd->name);
+					LM_ERR("Failed to free fixups for async command <%s> in %s,"
+					       " line %d\n", acmd->name, a->file, a->line);
 					break;
 				}
 			}
@@ -1031,16 +1020,16 @@ int do_action(struct action* a, struct sip_msg* msg)
 
 				if ((ret = get_cmd_fixups(msg, acmd->params, aitem->elem,
 					cmdp, tmp_vals)) < 0) {
-					LM_ERR("Failed to get fixups for async command <%s>\n",
-						acmd->name);
+					LM_ERR("Failed to get fixups for launch command <%s> in %s,"
+					       " line %d\n", acmd->name, a->file, a->line);
 					break;
 				}
 
 				ret = async_script_launch( msg, aitem, a->elem[1].u.number, cmdp);
 
 				if (free_cmd_fixups(acmd->params, aitem->elem, cmdp) < 0) {
-					LM_ERR("Failed to free fixups for command <%s>\n",
-						cmd->name);
+					LM_ERR("Failed to free fixups for launch command <%s> in %s,"
+					       " line %d\n", acmd->name, a->file, a->line);
 					break;
 				}
 			}
@@ -1172,17 +1161,23 @@ void __script_trace(char *class, char *action, struct sip_msg *msg,
  * functions used to populate $params() vars in the route_param structure
  */
 
-void route_params_push_level(void *params, void *extra, param_getf_t getf)
+void route_params_push_level(char *rt_name, void *params, void *extra, param_getf_t getf)
 {
 	route_rec_level++;
 	route_params[route_rec_level].params = params;
 	route_params[route_rec_level].extra = extra;
 	route_params[route_rec_level].get_param = getf;
+
+	if (rt_name) {
+		route_stack[route_stack_size] = rt_name;
+		route_stack_size++;
+	}
 }
 
 void route_params_pop_level(void)
 {
 	route_rec_level--;
+	route_stack_size--;
 }
 
 int route_params_run(struct sip_msg *msg,  pv_param_t *ip, pv_value_t *res)
@@ -1208,6 +1203,13 @@ static const char *_sip_msg_buf =
 "CSeq: 1 DUMMY\r\n\r\n";
 static struct sip_msg* dummy_static_req= NULL;
 static int dummy_static_in_used = 0;
+
+int is_dummy_sip_msg(struct sip_msg *req)
+{
+	if (req && req->buf==_sip_msg_buf)
+		return 0;
+	return -1;
+}
 
 struct sip_msg* get_dummy_sip_msg(void)
 {
@@ -1267,6 +1269,15 @@ void release_dummy_sip_msg( struct sip_msg* req)
 		req->set_global_address.len = req->set_global_port.len = 0;
 		req->add_rm = req->body_lumps = NULL;
 		req->reply_lump = NULL;
+		req->ruri_q = Q_UNSPECIFIED;
+		req->ruri_bflags = 0;
+		req->force_send_socket = NULL;
+		req->parsed_uri_ok = 0;
+		req->parsed_orig_ruri_ok = 0;
+		req->add_to_branch_len = 0;
+		req->flags = 0;
+		req->msg_flags = 0;
+		memset( &req->time, 0, sizeof(struct timeval));
 		dummy_static_in_used = 0;
 	} else {
 		LM_DBG("freeing allocated sip msg %p\n",req);

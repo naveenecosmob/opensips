@@ -29,9 +29,9 @@
 	<row>
 		<entry>2. </entry>
 		<entry>Vlad Patrascu (<ulink url="https://github.com/rvlad-patrascu">@rvlad-patrascu</ulink>)</entry>
-		<entry align="center">63</entry>
-		<entry align="center">33</entry>
-		<entry align="center">2162</entry>
+		<entry align="center">64</entry>
+		<entry align="center">34</entry>
+		<entry align="center">2165</entry>
 		<entry align="center">688</entry>
 	</row>
 	<row>
@@ -45,26 +45,26 @@
 	<row>
 		<entry>4. </entry>
 		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">45</entry>
-		<entry align="center">39</entry>
-		<entry align="center">313</entry>
-		<entry align="center">123</entry>
+		<entry align="center">50</entry>
+		<entry align="center">43</entry>
+		<entry align="center">410</entry>
+		<entry align="center">144</entry>
 	</row>
 	<row>
 		<entry>5. </entry>
 		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">32</entry>
-		<entry align="center">28</entry>
-		<entry align="center">129</entry>
-		<entry align="center">76</entry>
+		<entry align="center">37</entry>
+		<entry align="center">33</entry>
+		<entry align="center">166</entry>
+		<entry align="center">88</entry>
 	</row>
 	<row>
 		<entry>6. </entry>
 		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">18</entry>
-		<entry align="center">14</entry>
-		<entry align="center">89</entry>
-		<entry align="center">130</entry>
+		<entry align="center">17</entry>
+		<entry align="center">13</entry>
+		<entry align="center">87</entry>
+		<entry align="center">126</entry>
 	</row>
 	<row>
 		<entry>7. </entry>
@@ -76,32 +76,32 @@
 	</row>
 	<row>
 		<entry>8. </entry>
+		<entry>Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>)</entry>
+		<entry align="center">5</entry>
+		<entry align="center">2</entry>
+		<entry align="center">158</entry>
+		<entry align="center">27</entry>
+	</row>
+	<row>
+		<entry>9. </entry>
+		<entry>Maksym Sobolyev (<ulink url="https://github.com/sobomax">@sobomax</ulink>)</entry>
+		<entry align="center">4</entry>
+		<entry align="center">2</entry>
+		<entry align="center">20</entry>
+		<entry align="center">13</entry>
+	</row>
+	<row>
+		<entry>10. </entry>
 		<entry>Stanislaw Pitucha</entry>
 		<entry align="center">4</entry>
 		<entry align="center">2</entry>
 		<entry align="center">6</entry>
 		<entry align="center">6</entry>
 	</row>
-	<row>
-		<entry>9. </entry>
-		<entry>Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>)</entry>
-		<entry align="center">4</entry>
-		<entry align="center">2</entry>
-		<entry align="center">5</entry>
-		<entry align="center">3</entry>
-	</row>
-	<row>
-		<entry>10. </entry>
-		<entry>Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>)</entry>
-		<entry align="center">4</entry>
-		<entry align="center">1</entry>
-		<entry align="center">157</entry>
-		<entry align="center">26</entry>
-	</row>
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Ionut Ionita (<ulink url="https://github.com/ionutrazvanionita">@ionutrazvanionita</ulink>), <ulink url="https://github.com/DMOsipov">@DMOsipov</ulink>, Stéphane Alnet (<ulink url="https://github.com/shimaore">@shimaore</ulink>), Henk Hesselink, Ryan Bullock (<ulink url="https://github.com/rrb3942">@rrb3942</ulink>), Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>).</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Ionut Ionita (<ulink url="https://github.com/ionutrazvanionita">@ionutrazvanionita</ulink>), <ulink url="https://github.com/DMOsipov">@DMOsipov</ulink>, Stéphane Alnet (<ulink url="https://github.com/shimaore">@shimaore</ulink>), Henk Hesselink, Ryan Bullock (<ulink url="https://github.com/rrb3942">@rrb3942</ulink>), Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>).</para>
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -129,57 +129,57 @@
 	<row>
 		<entry>1. </entry>
 		<entry>Vlad Patrascu (<ulink url="https://github.com/rvlad-patrascu">@rvlad-patrascu</ulink>)</entry>
-		<entry align="center">May 2017 - Feb 2021</entry>
+		<entry align="center">May 2017 - May 2021</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
-		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">Mar 2014 - Sep 2020</entry>
+		<entry>Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>)</entry>
+		<entry align="center">Jan 2013 - May 2021</entry>
 	</row>
 	<row>
 		<entry>3. </entry>
-		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">Dec 2010 - Jul 2020</entry>
+		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
+		<entry align="center">Aug 2009 - Apr 2021</entry>
 	</row>
 	<row>
 		<entry>4. </entry>
-		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">Aug 2009 - Mar 2020</entry>
+		<entry>Maksym Sobolyev (<ulink url="https://github.com/sobomax">@sobomax</ulink>)</entry>
+		<entry align="center">Jan 2021 - Mar 2021</entry>
 	</row>
 	<row>
 		<entry>5. </entry>
+		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
+		<entry align="center">Dec 2010 - Mar 2021</entry>
+	</row>
+	<row>
+		<entry>6. </entry>
+		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
+		<entry align="center">Mar 2014 - Nov 2020</entry>
+	</row>
+	<row>
+		<entry>7. </entry>
 		<entry>Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>)</entry>
 		<entry align="center">Jun 2018 - Feb 2020</entry>
 	</row>
 	<row>
-		<entry>6. </entry>
+		<entry>8. </entry>
 		<entry><ulink url="https://github.com/DMOsipov">@DMOsipov</ulink></entry>
 		<entry align="center">Mar 2016 - Mar 2016</entry>
 	</row>
 	<row>
-		<entry>7. </entry>
+		<entry>9. </entry>
 		<entry>Ovidiu Sas (<ulink url="https://github.com/ovidiusas">@ovidiusas</ulink>)</entry>
 		<entry align="center">Nov 2010 - Mar 2016</entry>
 	</row>
 	<row>
-		<entry>8. </entry>
+		<entry>10. </entry>
 		<entry>Ionut Ionita (<ulink url="https://github.com/ionutrazvanionita">@ionutrazvanionita</ulink>)</entry>
 		<entry align="center">Feb 2015 - Feb 2015</entry>
-	</row>
-	<row>
-		<entry>9. </entry>
-		<entry>Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>)</entry>
-		<entry align="center">May 2014 - May 2014</entry>
-	</row>
-	<row>
-		<entry>10. </entry>
-		<entry>Vlad Paiu (<ulink url="https://github.com/vladpaiu">@vladpaiu</ulink>)</entry>
-		<entry align="center">Aug 2011 - Apr 2014</entry>
 	</row>
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Ryan Bullock (<ulink url="https://github.com/rrb3942">@rrb3942</ulink>), Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>), Stéphane Alnet (<ulink url="https://github.com/shimaore">@shimaore</ulink>), Anca Vamanu, Henk Hesselink, Stanislaw Pitucha.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>), Vlad Paiu (<ulink url="https://github.com/vladpaiu">@vladpaiu</ulink>), Ryan Bullock (<ulink url="https://github.com/rrb3942">@rrb3942</ulink>), Stéphane Alnet (<ulink url="https://github.com/shimaore">@shimaore</ulink>), Anca Vamanu, Henk Hesselink, Stanislaw Pitucha.</para>
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

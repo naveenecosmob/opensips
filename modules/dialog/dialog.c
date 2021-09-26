@@ -112,6 +112,8 @@ int profile_repl_cluster = 0;
 str dlg_repl_cap = str_init("dialog-dlg-repl");
 str prof_repl_cap = str_init("dialog-prof-repl");
 
+int cluster_auto_sync = 1;
+
 static int pv_get_dlg_count( struct sip_msg *msg, pv_param_t *param,
 		pv_value_t *res);
 
@@ -331,6 +333,7 @@ static param_export_t mod_params[]={
 	{ "replicate_profiles_check", INT_PARAM, &repl_prof_timer_check },
 	{ "replicate_profiles_buffer",INT_PARAM, &repl_prof_buffer_th   },
 	{ "replicate_profiles_expire",INT_PARAM, &repl_prof_timer_expire},
+	{ "cluster_auto_sync",        INT_PARAM, &cluster_auto_sync     },
 	{ 0,0,0 }
 };
 
@@ -381,6 +384,7 @@ static mi_export_t mi_cmds[] = {
 	},
 	{ "dlg_cluster_sync", 0, 0, 0, {
 		{mi_sync_cl_dlg, {0}},
+		{mi_sync_cl_dlg, {"sharing_tag", 0}},
 		{EMPTY_MI_RECIPE}}
 	},
 	{ "profile_get_size", 0, 0, 0, {
@@ -467,7 +471,8 @@ static module_dependency_t *get_deps_db_mode(param_export_t *param)
 
 static dep_export_t deps = {
 	{ /* OpenSIPS module dependencies */
-		{ MOD_TYPE_DEFAULT, "tm", DEP_ABORT },
+		/* since dialog registers a tm "unref" callback, tm must destroy 1st */
+		{ MOD_TYPE_DEFAULT, "tm", DEP_ABORT|DEP_REVERSE_DESTROY },
 		{ MOD_TYPE_NULL, NULL, 0 },
 	},
 	{ /* modparam dependencies */
@@ -505,9 +510,8 @@ struct module_exports exports= {
 
 static int fixup_check_var(void** param)
 {
-	if (((pv_spec_t *)*param)->type!=PVT_AVP &&
-		((pv_spec_t *)*param)->type!=PVT_SCRIPTVAR) {
-		LM_ERR("return parameter must be an AVP or SCRIPT VAR!\n");
+	if (!pv_is_w((pv_spec_t *)*param)) {
+		LM_ERR("the return parameter must be a writable pseudo-variable\n");
 		return E_SCRIPT;
 	}
 
@@ -517,7 +521,7 @@ static int fixup_check_var(void** param)
 static int fixup_check_avp(void** param)
 {
 	if (((pv_spec_t *)*param)->type!=PVT_AVP) {
-		LM_ERR("return parameter must be an AVP\n");
+		LM_ERR("the return parameter must be an AVP\n");
 		return E_SCRIPT;
 	}
 
@@ -1204,15 +1208,17 @@ static int w_unset_dlg_profile(struct sip_msg *msg, str *prof_name, str *value)
 	if (profile->has_value) {
 		if (!value) {
 			LM_WARN("missing value\n");
-			return -1;	
+			return -1;
 		}
 		if ( unset_dlg_profile( dlg, value, profile) < 0 ) {
-			LM_ERR("failed to unset profile\n");
+			LM_WARN("dialog not found in profile %.*s with value %.*s\n",
+					prof_name->len, prof_name->s, value->len, value->s);
 			return -1;
 		}
 	} else {
 		if ( unset_dlg_profile( dlg, NULL, profile) < 0 ) {
-			LM_ERR("failed to unset profile\n");
+			LM_WARN("dialog not found in profile %.*s\n",
+					prof_name->len, prof_name->s);
 			return -1;
 		}
 	}

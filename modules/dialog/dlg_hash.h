@@ -67,6 +67,7 @@
 #define DLG_FLAG_WAS_CANCELLED			(1<<16)
 #define DLG_FLAG_RACE_CONDITION_OCCURRED	(1<<17)
 #define DLG_FLAG_SELF_EXTENDED_TIMEOUT		(1<<18)
+#define DLG_FLAG_SYNCED                     (1<<19)
 
 #define dlg_has_reinvite_pinging(dlg) \
 	(dlg->flags & DLG_FLAG_REINVITE_PING_CALLER || \
@@ -211,7 +212,7 @@ extern int dlg_enable_stats;
 
 struct dlg_cell *get_current_dialog();
 
-#define dlg_hash(_callid) core_hash(_callid, 0, d_table->size)
+#define dlg_hash(_callid) core_hash(_callid, NULL, d_table->size)
 
 #define dlg_lock(_table, _entry) \
 		lock_set_get( (_table)->locks, (_entry)->lock_idx);
@@ -397,7 +398,7 @@ struct dlg_cell* get_dlg(str *callid, str *ftag, str *ttag,
 
 struct dlg_cell* get_dlg_by_val(str *attr, str *val);
 
-struct dlg_cell* get_dlg_by_callid( str *callid, int active_only);
+struct dlg_cell* get_dlg_by_callid(const str *callid, int active_only);
 
 struct dlg_cell* get_dlg_by_did(str *did, int active_only);
 
@@ -654,8 +655,8 @@ void state_changed_event_destroy(void);
 
 #define dlg_parse_db_id(_did, _h_entry, _h_id) \
 	do { \
-		(_h_entry) = (unsigned int)((_did) >> 32); \
-		(_h_id) = (unsigned int)((_did) & 0x00000000ffffffff); \
+		(_h_entry) = (unsigned int)((unsigned long long)(_did) >> 32); \
+		(_h_id) = (unsigned int)((unsigned long long)(_did) & 0xFFFFFFFFULL); \
 	} while(0)
 
 #endif

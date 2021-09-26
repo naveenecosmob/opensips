@@ -26,6 +26,7 @@
 
 #include "../../sr_module.h"
 #include "../../str.h"
+#include "../../ipc.h"
 #include "../../timer.h"
 #include "../../lib/csv.h"
 
@@ -194,6 +195,10 @@ static dep_export_t deps = {
 		{ MOD_TYPE_SQLDB, NULL, DEP_ABORT },
 		{ MOD_TYPE_DEFAULT, "tm", DEP_ABORT },
 		{ MOD_TYPE_DEFAULT, "dialog", DEP_ABORT },
+
+		/* qrouting must always be first to load its profiles,
+		 * so drouting can look them up during DRCB_RLD_INIT_RULE */
+		{ MOD_TYPE_DEFAULT, "drouting", DEP_SILENT|DEP_REVERSE },
 		{ MOD_TYPE_NULL, NULL, 0 },
 	},
 	{ /* modparam dependencies */
@@ -267,6 +272,12 @@ static int qr_init(void)
 	return 0;
 }
 
+static void rpc_qr_reload(int _, void *__)
+{
+	if (qr_reload(&qr_dbf, qr_db_hdl) < 0)
+		LM_ERR("failed to load data from db\n");
+}
+
 static int qr_child_init(int rank)
 {
 	/* re-connect to the db */
@@ -277,11 +288,15 @@ static int qr_child_init(int rank)
 		return -1;
 	}
 
-	if (!(qr_db_hdl = qr_dbf.init(&db_url)))
+	if (!(qr_db_hdl = qr_dbf.init(&db_url))) {
 		LM_ERR("failed to load db url %.*s\n", db_url.len, db_url.s);
+		return -1;
+	}
 
-	if (rank == 1 && qr_reload(&qr_dbf, qr_db_hdl) < 0)
-		LM_ERR("failed to load data from db\n");
+	if (rank == 1 && ipc_send_rpc(process_no, rpc_qr_reload, NULL) < 0) {
+		LM_CRIT("failed to send RPC for data loading\n");
+		return -1;
+	}
 
 	return 0;
 }

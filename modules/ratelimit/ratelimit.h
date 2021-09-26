@@ -32,6 +32,17 @@
 #define RL_PIPE_PENDING		(1<<0)
 #define BIN_VERSION         1
 
+#ifndef RL_DEBUG_PIPES
+# define RL_DBG(...)
+#else
+# define RL_DBG(pipe, format, args...) do { \
+	struct timeval __tv; \
+	gettimeofday(&__tv, NULL); \
+	LM_INFO("%.*s@%lu: " format "\n", (pipe)->name.len, (pipe)->name.s, \
+			(__tv.tv_sec * 1000 + __tv.tv_usec / 1000), ##args); \
+} while(0)
+#endif
+
 
 #include "../../map.h"
 #include "../clusterer/api.h"
@@ -66,6 +77,9 @@ typedef struct rl_window {
 } rl_window_t;
 
 typedef struct rl_pipe {
+#ifdef RL_DEBUG_PIPES
+	str name;
+#endif
 	int limit;					/* limit used by algorithm */
 	int counter;				/* countes the accesses */
 	int my_counter;				/* countes the accesses of this instance */
@@ -73,7 +87,8 @@ typedef struct rl_pipe {
 	int last_counter;			/* last counter */
 	int load;					/* countes the accesses */
 	rl_algo_t algo;				/* the algorithm used */
-	unsigned long last_used;	/* timestamp when the pipe was last accessed */
+	time_t last_used;			/* timestamp when the pipe was last accessed */
+	time_t last_local_used;		/* timestamp when the pipe was last locally accessed */
 	rl_repl_counter_t *dsts;	/* counters per destination */
 	rl_window_t rwin;			/* window of requests */
 } rl_pipe_t;
@@ -147,6 +162,6 @@ int hist_get_count(rl_pipe_t *pipe);
 
 #define RL_PIPE_COUNTER		0
 #define RL_EXPIRE_TIMER		10
-#define RL_BUF_THRESHOLD	1400
+#define RL_BUF_THRESHOLD	32767
 
 #endif /* _RATELIMIT_H_ */

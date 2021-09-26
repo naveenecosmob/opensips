@@ -57,7 +57,7 @@
 
 enum sip_protos { PROTO_NONE = 0, PROTO_FIRST = 1, PROTO_UDP = 1, \
 	PROTO_TCP, PROTO_TLS, PROTO_SCTP, PROTO_WS, PROTO_WSS, PROTO_BIN,
-				PROTO_HEP_UDP, PROTO_HEP_TCP, PROTO_SMPP, PROTO_OTHER };
+	PROTO_BINS, PROTO_HEP_UDP, PROTO_HEP_TCP, PROTO_SMPP, PROTO_OTHER };
 #define PROTO_LAST PROTO_OTHER
 
 struct ip_addr{
@@ -96,8 +96,8 @@ struct receive_info {
 	unsigned short src_port; /*!< host byte order */
 	unsigned short dst_port; /*!< host byte order */
 	int proto;
-	int proto_reserved1; /*!< tcp stores the connection id here */
-	int proto_reserved2;
+	unsigned int proto_reserved1; /*!< tcp stores the connection id here */
+	unsigned int proto_reserved2;
 	union sockaddr_union src_su; /*!< useful for replies*/
 	struct socket_info* bind_address; /*!< sock_info structure on which the msg was received*/
 	/* no need for dst_su yet */
@@ -106,7 +106,7 @@ struct receive_info {
 
 struct dest_info {
 	int proto;
-	int proto_reserved1; /*!< tcp stores the connection id here */
+	unsigned int proto_reserved1; /*!< tcp stores the connection id here */
 	union sockaddr_union to;
 	struct socket_info* send_sock;
 };
@@ -153,7 +153,7 @@ struct socket_id {
 		struct ip_addr __ip; \
 		sockaddr2ip_addr( &__ip, (struct sockaddr*)_su ); \
 		_ip_char = ip_addr2a(&__ip); \
-		_port_no = su_getport( (union sockaddr_union*)_su); \
+		_port_no = su_getport( (union sockaddr_union*)(void *)_su); \
 	} while(0)
 
 
@@ -211,22 +211,26 @@ inline static int matchnet(struct ip_addr* ip, struct net* net)
 /*! \brief inits an ip_addr pointer from a sockaddr structure*/
 static inline void sockaddr2ip_addr(struct ip_addr* ip, struct sockaddr* sa)
 {
+	void *copyfrom;
+
 	switch(sa->sa_family){
 	case AF_INET:
 			ip->af=AF_INET;
 			ip->len=4;
-			memcpy(ip->u.addr, &((struct sockaddr_in*)sa)->sin_addr, 4);
+			copyfrom = &((struct sockaddr_in*)(void *)sa)->sin_addr;
 			break;
 	case AF_INET6:
 			ip->af=AF_INET6;
 			ip->len=16;
-			memcpy(ip->u.addr, &((struct sockaddr_in6*)sa)->sin6_addr, 16);
+			copyfrom = &((struct sockaddr_in6*)(void *)sa)->sin6_addr;
 			break;
 	default:
 			LM_CRIT("unknown address family %d\n", sa->sa_family);
 			/* clear the structure to prevent uninitialized warnings */
 			ip->af=sa->sa_family;
+			return;
 	}
+	memcpy(ip->u.addr, copyfrom, ip->len);
 }
 
 

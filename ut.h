@@ -43,6 +43,8 @@
 #include "mem/mem.h"
 #include "mem/shm_mem.h"
 
+#include "lib/str2const.h"
+
 typedef struct _int_str_t {
 	union {
 		int i;
@@ -481,10 +483,16 @@ inline static int pathmax(void)
 	return pathmax;
 }
 
+/* faster than glibc equivalents */
+#define _isdigit(c) ((c) >= '0' && (c) <= '9')
+#define _isalpha(c) \
+	(((c) >= 'a' && (c) <= 'z') || \
+	 ((c) >= 'A' && (c) <= 'Z'))
 #define _isxdigit(c) \
-	((c >= '0' && c <= '9') || \
-	 (c >= 'a' && c <= 'f') || \
-	 (c >= 'A' && c <= 'F'))
+	(((c) >= '0' && (c) <= '9') || \
+	 ((c) >= 'a' && (c) <= 'f') || \
+	 ((c) >= 'A' && (c) <= 'F'))
+#define _isalnum(c) (_isalpha(c) || _isdigit(c))
 
 inline static int hex2int(char hex_digit)
 {
@@ -590,22 +598,32 @@ static inline void unescape_crlf(str *in_out)
 	}
 }
 
-static inline int is_e164(str* _user)
+static inline int _is_e164(const str* _user, int require_plus)
 {
-	int i;
-	char c;
+	char *d, *start, *end;
 
-	if ((_user->len > 2) && (_user->len < 17) && ((_user->s)[0] == '+')) {
-		for (i = 1; i < _user->len; i++) {
-			c = (_user->s)[i];
-			if ((c < '0') || (c > '9')) return -1;
-		}
-		return 1;
+	if (_user->len < 1)
+		return -1;
+
+	if (_user->s[0] == '+') {
+		start = _user->s + 1;
 	} else {
-	    return -1;
+		if (require_plus)
+			return -1;
+		start = _user->s;
 	}
-}
 
+	end = _user->s + _user->len;
+	if (end - start < 2 || end - start > 15)
+		return -1;
+
+	for (d = start; d < end; d++)
+		if (!_isdigit(*d))
+			return -1;
+
+	return 1;
+}
+#define is_e164(_user) _is_e164(_user, 1)
 
 /*
  * Convert a string to lower case
@@ -645,7 +663,7 @@ static inline int str2short(str* _s, unsigned short *_r)
 /*
  * Convert a str into integer
  */
-static inline int str2int(str* _s, unsigned int* _r)
+static inline int str2int(const str* _s, unsigned int* _r)
 {
 	int i;
 
@@ -668,7 +686,7 @@ static inline int str2int(str* _s, unsigned int* _r)
 /*
  * Convert a str into a big integer
  */
-static inline int str2int64(str* _s, uint64_t *_r)
+static inline int str2int64(const str* _s, uint64_t *_r)
 {
 	int i;
 
@@ -692,7 +710,7 @@ static inline int str2int64(str* _s, uint64_t *_r)
 /*
  * Convert a str into signed integer
  */
-static inline int str2sint(str* _s, int* _r)
+static inline int str2sint(const str* _s, int* _r)
 {
 	int i;
 	int s;
@@ -727,7 +745,7 @@ static inline int str2sint(str* _s, int* _r)
 /*
  * Convert a str (base 10 or 16) into integer
  */
-static inline int strno2int( str *val, unsigned int *mask )
+static inline int strno2int(const str *val, unsigned int *mask )
 {
 	/* hexa or decimal*/
 	if (val->len>2 && val->s[0]=='0' && val->s[1]=='x') {
@@ -841,6 +859,8 @@ static inline int shm_str_extend(str *in, int size)
 {
 	char *p;
 
+	/* do not check for !in->s here, as it's better
+	 * to crash sooner on a corrupt @in string (e.g. {NULL, 172}) */
 	if (in->len < size) {
 		p = shm_realloc(in->s, size);
 		if (!p) {
@@ -927,6 +947,8 @@ static inline int pkg_str_extend(str *in, int size)
 {
 	char *p;
 
+	/* do not check for !in->s here, as it's better
+	 * to crash sooner on a corrupt @in string (e.g. {NULL, 172}) */
 	if (in->len < size) {
 		p = pkg_realloc(in->s, size);
 		if (!p) {
@@ -945,28 +967,40 @@ static inline int pkg_str_extend(str *in, int size)
 /*
  * test if two str's are equal
  */
-static inline int str_match(const str *a, const str *b)
+static inline int _str_matchCC(const str_const *a, const str_const *b)
 {
 	return a->len == b->len && !memcmp(a->s, b->s, a->len);
 }
-
+static inline int _str_matchSS(const str *a, const str *b)
+{
+        return _str_matchCC(str2const(a), str2const(b));
+}
+static inline int _str_matchSC(const str *a, const str_const *b)
+{
+        return _str_matchCC(str2const(a), b);
+}
+static inline int _str_matchCS(const str_const *a, const str *b)
+{
+        return _str_matchCC(a, str2const(b));
+}
 
 /*
  * test if two str's are equal, case-insensitive
  */
-static inline int str_casematch(const str *a, const str *b)
+static inline int _str_casematchCC(const str_const *a, const str_const *b)
 {
-	char *p, *q, *end;
+	const char *p, *q, *end;
 
 	if (a->len != b->len)
 		return 0;
 
 	p = a->s;
 	q = b->s;
-	end = p + a->len;
 
-	if (p == end || p == q)
+	if (p == q)
 		return 1;
+
+	end = p + a->len;
 
 	do {
 		if (tolower(*p) != tolower(*q++))
@@ -975,12 +1009,23 @@ static inline int str_casematch(const str *a, const str *b)
 
 	return 1;
 }
-
+static inline int _str_casematchSS(const str *a, const str *b)
+{
+        return _str_casematchCC(str2const(a), str2const(b));
+}
+static inline int _str_casematchSC(const str *a, const str_const *b)
+{
+        return _str_casematchCC(str2const(a), b);
+}
+static inline int _str_casematchCS(const str_const *a, const str *b)
+{
+        return _str_casematchCC(a, str2const(b));
+}
 
 /*
  * compare two str's
  */
-static inline int str_strcmp(const str *stra, const str *strb)
+static inline int _str_strcmpCC(const str_const *stra, const str_const *strb)
 {
 	int i;
 	int alen;
@@ -1015,6 +1060,18 @@ static inline int str_strcmp(const str *stra, const str *strb)
 		return 1;
 	else
 		return 0;
+}
+static inline int _str_strcmpSS(const str *a, const str *b)
+{
+	return _str_strcmpCC(str2const(a), str2const(b));
+}
+static inline int _str_strcmpSC(const str *a, const str_const *b)
+{
+	return _str_strcmpCC(str2const(a), b);
+}
+static inline int _str_strcmpCS(const str_const *a, const str *b)
+{
+	return _str_strcmpCC(a, str2const(b));
 }
 
 /*
@@ -1376,6 +1433,15 @@ static inline void * l_memmem(const void *b1, const void *b2,
 	return NULL;
 }
 
+/**
+ * Make any database URL log-friendly by masking its password, if any
+ * Note: makes use of a single, static buffer -- use accordingly!
+ */
+char *db_url_escape(const str *url);
+static inline char *_db_url_escape(char *url)
+{
+	return db_url_escape(_str(url));
+}
 
 int user2uid(int* uid, int* gid, char* user);
 

@@ -23,6 +23,7 @@
 #include "cgrates_engine.h"
 #include "../../reactor_defs.h"
 #include "../../net/net_tcp.h"
+#include "../../net/tcp_common.h"
 #include "../../resolve.h"
 #include "../../async.h"
 
@@ -157,33 +158,19 @@ int cgrc_conn(struct cgr_conn *c)
 {
 	int s = -1;
 	union sockaddr_union my_name;
-	int my_name_len;
 	struct ip_addr *ip;
 
-	s=socket(AF_INET, SOCK_STREAM, 0);
-	if (s==-1){
-		LM_ERR("socket: (%d) %s\n", errno, strerror(errno));
-		return -1;
-	}
-	if (tcp_init_sock_opt(s)<0){
-		LM_ERR("tcp_init_sock_opt failed\n");
-		goto error;
-	}
-
 	if (cgre_bind_ip.s) {
-		my_name_len = sizeof(struct sockaddr_in);
 		if ((ip = str2ip(&cgre_bind_ip)) == NULL) {
 			LM_ERR("invalid ip in bind_ip: %s\n", cgre_bind_ip.s);
 			goto error;
 		}
 		init_su(&my_name, ip, 0);
-		if (bind(s, &my_name.s, my_name_len )!=0) {
-			LM_ERR("bind failed (%d) %s\n", errno,strerror(errno));
-			goto error;
-		}
-	}
+		s = tcp_sync_connect_fd(&my_name, &c->engine->su);
+	} else
+		s = tcp_sync_connect_fd(NULL, &c->engine->su);
 
-	if (tcp_connect_blocking(s, &c->engine->su.s, sockaddru_len(c->engine->su))<0){
+	if (s < 0) {
 		LM_ERR("cannot connect to %.*s:%d\n", c->engine->host.len,
 				c->engine->host.s, c->engine->port);
 		goto error;

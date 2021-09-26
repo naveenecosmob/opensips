@@ -93,7 +93,7 @@ int new_urecord(str* _dom, str* _aor, urecord_t** _r)
 	memcpy((*_r)->aor.s, _aor->s, _aor->len);
 	(*_r)->aor.len = _aor->len;
 	(*_r)->domain = _dom;
-	(*_r)->aorhash = core_hash(_aor, 0, 0);
+	(*_r)->aorhash = core_hash(_aor, NULL, 0);
 
 	return 0;
 }
@@ -484,8 +484,7 @@ int db_delete_urecord(urecord_t* _r)
 		return -1;
 	}
 
-	CON_PS_REFERENCE(ul_dbh) = &my_ps;
-
+	CON_SET_CURR_PS(ul_dbh, &my_ps);
 	if (ul_dbf.delete(ul_dbh, keys, 0, vals, (use_domain) ? (2) : (1)) < 0) {
 		LM_ERR("failed to delete from database\n");
 		return -1;
@@ -849,7 +848,7 @@ void release_urecord(urecord_t* _r, char skip_replication)
  * into urecord
  */
 int insert_ucontact(urecord_t* _r, str* _contact, ucontact_info_t* _ci,
-										ucontact_t** _c, char skip_replication)
+        const struct ct_match *match, char skip_replication, ucontact_t** _c)
 {
 	int first_contact = !_r->contacts;
 
@@ -874,8 +873,12 @@ int insert_ucontact(urecord_t* _r, str* _contact, ucontact_info_t* _ci,
 		return -1;
 	}
 
+	if (_ci->pre_replicate_cb
+	        && _ci->pre_replicate_cb(*_c, _ci->pre_replicate_info) != 0)
+		LM_ERR("pre-replication callback returned non-zero\n");
+
 	if (!skip_replication && have_data_replication())
-		replicate_ucontact_insert(_r, _contact, *_c);
+		replicate_ucontact_insert(_r, _contact, *_c, match);
 
 	if (exists_ulcb_type(UL_CONTACT_INSERT))
 		run_ul_callbacks(UL_CONTACT_INSERT, *_c);
@@ -901,10 +904,11 @@ int insert_ucontact(urecord_t* _r, str* _contact, ucontact_info_t* _ci,
 /*! \brief
  * Delete ucontact from urecord
  */
-int delete_ucontact(urecord_t* _r, struct ucontact* _c, char skip_replication)
+int delete_ucontact(urecord_t* _r, struct ucontact* _c,
+        const struct ct_match *match, char skip_replication)
 {
 	if (!skip_replication && have_data_replication())
-		replicate_ucontact_delete(_r, _c);
+		replicate_ucontact_delete(_r, _c, match);
 
 	if (exists_ulcb_type(UL_CONTACT_DELETE))
 		run_ul_callbacks(UL_CONTACT_DELETE, _c);
@@ -990,6 +994,9 @@ static inline struct ucontact* contact_params_match(ucontact_t* contacts,
 		}
 
 		for (param = _params; param; param = param->next) {
+			/* a bit counter-intuitive, but, according to RFC 3261 § 19.1.4, if
+			 * an unknown URI parameter is missing from either URI,
+			 * the matching of that parameter is successful! */
 			if (get_uri_param_val(&ct, &param->s, &v1) != 0 ||
 			        get_uri_param_val(&cti, &param->s, &v2) != 0)
 				continue;
@@ -1016,8 +1023,9 @@ next_contact:;
  *     -2 - found, but to be skipped (same cseq)
  */
 int get_ucontact(urecord_t* _r, str* _c, str* _callid, int _cseq,
-								struct ct_match *match, struct ucontact** _co)
+                     const struct ct_match *_match, struct ucontact** _co)
 {
+	struct ct_match match = *_match;
 	ucontact_t* ptr;
 	int no_callid;
 
@@ -1025,11 +1033,11 @@ int get_ucontact(urecord_t* _r, str* _c, str* _callid, int _cseq,
 	no_callid = 0;
 	*_co = 0;
 
-	if (match->mode == CT_MATCH_NONE)
-		match->mode = matching_mode;
+	if (match.mode == CT_MATCH_NONE)
+		match.mode = matching_mode;
 
-	LM_DBG("using ct matching mode %d\n", match->mode);
-	switch (match->mode) {
+	LM_DBG("using ct matching mode %d\n", match.mode);
+	switch (match.mode) {
 	case CT_MATCH_CONTACT_ONLY:
 		ptr = contact_match(_r->contacts, _c);
 		break;
@@ -1038,10 +1046,10 @@ int get_ucontact(urecord_t* _r, str* _c, str* _callid, int _cseq,
 		no_callid = 1;
 		break;
 	case CT_MATCH_PARAMS:
-		ptr = contact_params_match(_r->contacts, _c, match->match_params);
+		ptr = contact_params_match(_r->contacts, _c, match.match_params);
 		break;
 	default:
-		LM_CRIT("unknown contact matching mode %d\n", match->mode);
+		LM_CRIT("unknown contact matching mode %d\n", match.mode);
 		return -1;
 	}
 

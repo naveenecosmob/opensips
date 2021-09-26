@@ -30,8 +30,8 @@
 struct dlg_binds cgr_dlgb;
 struct tm_binds cgr_tmb;
 
-gen_lock_t *cgrates_contexts_lock;
-struct list_head *cgrates_contexts;
+static gen_lock_t *cgrates_contexts_lock;
+static struct list_head *cgrates_contexts;
 
 static inline void cgr_free_acc_ctx(struct cgr_acc_ctx *ctx);
 static void cgr_tmcb_func( struct cell* t, int type, struct tmcb_params *ps);
@@ -45,7 +45,7 @@ static str cgr_serial_str = str_init("cgrX_serial");
 int cgr_acc_init(void)
 {
 	cgrates_contexts_lock = lock_alloc();
-	if (!cgrates_contexts_lock) {
+	if (!cgrates_contexts_lock || !lock_init(cgrates_contexts_lock)) {
 		LM_ERR("cannot create lock for cgrates lists\n");
 		return -1;
 	}
@@ -227,6 +227,7 @@ void cgr_ref_acc_ctx(struct cgr_acc_ctx *ctx, int how, const char *who)
 static int cgr_proc_start_acc_reply(struct cgr_conn *c, json_object *jobj,
 		void *p, char *error)
 {
+	unsigned long long timeout;
 	int_str val;
 	struct dlg_cell *dlg = (struct dlg_cell *)p;
 
@@ -243,18 +244,25 @@ static int cgr_proc_start_acc_reply(struct cgr_conn *c, json_object *jobj,
 		}
 		/* we are only interested in the MaxUsage token */
 		if (!json_object_object_get_ex(jorig, "MaxUsage", &jobj)) {
-			LM_ERR("CGRateS did not return an MaxUsage in InitiateSession reply: %d %s\n",
-					json_object_get_type(jorig), json_object_to_json_string(jorig));
-			return -4;
+			LM_DBG("CGRateS did not return an MaxUsage in InitiateSession reply: %d %s"
+					"- allow unlimited!\n", json_object_get_type(jorig),
+					json_object_to_json_string(jorig));
+			return 1;
 		}
 		if (json_object_get_type(jobj) != json_type_int) {
 			LM_ERR("CGRateS returned a non-int type for MaxUsage InitiateSession reply: %d %s\n",
 					json_object_get_type(jobj), json_object_to_json_string(jobj));
 			return -4;
 		}
-		val.n = json_object_get_int64(jobj);
-		if (val.n != 0 && val.n != -1)
-			val.n /= 1000000000;
+		timeout = json_object_get_int64(jobj);
+		if (timeout != 0 && timeout != -1)
+			val.n = timeout / 1000000000;
+		else
+			val.n = timeout;
+	} else if (!jobj) {
+		LM_DBG("CGRateS did not return an MaxUsage in InitiateSession reply "
+				"- allow unlimited!\n");
+		return 1;
 	} else {
 		if (json_object_get_type(jobj) != json_type_int) {
 			LM_ERR("CGRateS returned a non-int type for InitiateSession reply: %d %s\n",
@@ -378,7 +386,7 @@ static json_object *cgr_get_start_acc_msg(struct sip_msg *msg,
 
 	/* ask to init the call */
 	if (!cgre_compat_mode &&
-			((s && !cgr_get_const_kv(&s->req_kvs, "InitSession")) || !s) &&
+			!cgr_get_const_kv(&s->req_kvs, "InitSession") &&
 			cgr_obj_push_bool(cmsg->opts, "InitSession", 1) < 0) {
 		LM_ERR("cannot push InitSession to request opts!\n");
 		goto error;
@@ -504,7 +512,7 @@ static json_object *cgr_get_stop_acc_msg(struct sip_msg *msg,
 
 	/* ask to terminate the call */
 	if (!cgre_compat_mode &&
-			((s && !cgr_get_const_kv(&s->req_kvs, "TerminateSession")) || !s) &&
+			!cgr_get_const_kv(&s->req_kvs, "TerminateSession") &&
 			cgr_obj_push_bool(cmsg->opts, "TerminateSession", 1) < 0) {
 		LM_ERR("cannot push TerminateSession to request opts!\n");
 		goto error;

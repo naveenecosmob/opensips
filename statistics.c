@@ -34,7 +34,11 @@
  * \brief Statistics support
  */
 
-
+#ifdef HAVE_STDATOMIC
+#include <stdatomic.h>
+#else
+#include "atomic.h"
+#endif
 #include <string.h>
 
 #include "mem/shm_mem.h"
@@ -46,7 +50,6 @@
 #include "core_stats.h"
 #include "statistics.h"
 #include "pt.h"
-#include "atomic.h"
 #include "globals.h"
 #include "rw_locking.h"
 
@@ -93,7 +96,7 @@ static mi_export_t mi_stat_cmds[] = {
 gen_lock_t *stat_lock = 0;
 #endif
 
-#define stat_hash(_s) core_hash( _s, 0, STATS_HASH_SIZE)
+#define stat_hash(_s) core_hash( _s, NULL, STATS_HASH_SIZE)
 
 #define stat_is_hidden(_s)  ((_s)->flags&STAT_HIDDEN)
 
@@ -169,13 +172,26 @@ module_stats* get_stat_module( str *module)
 	return 0;
 }
 
-static inline module_stats* __add_stat_module( char *module, int unsafe)
+module_stats *module_stats_iterate(module_stats *mod)
+{
+	int m;
+	if (!mod) {
+		/* first iteration - return head */
+		return ((collector->mod_no > 0)?
+				&collector->amodules[0]:NULL);
+	}
+	for (m = 0; m < collector->mod_no - 1; m++)
+		if (&collector->amodules[m] == mod)
+			return &collector->amodules[m + 1];
+	return NULL;
+}
+
+static inline module_stats* __add_stat_module(str *module, int unsafe)
 {
 	module_stats *amods;
 	module_stats *mods;
-	int len;
 
-	if ( (module==0) || ((len = strlen(module))==0 ) )
+	if ( (module==0) || module->len==0 )
 		return NULL;
 
 	amods = unsafe ?
@@ -196,13 +212,13 @@ static inline module_stats* __add_stat_module( char *module, int unsafe)
 	mods = &amods[collector->mod_no-1];
 	memset( mods, 0, sizeof(module_stats) );
 
-	mods->name.s = unsafe ? shm_malloc_unsafe(len) : shm_malloc(len);
+	mods->name.s = unsafe ? shm_malloc_unsafe(module->len) : shm_malloc(module->len);
 	if (!mods->name.s) {
 	    LM_ERR("oom\n");
 	    return NULL;
 	}
-	memcpy(mods->name.s, module, len);
-	mods->name.len = len;
+	memcpy(mods->name.s, module->s, module->len);
+	mods->name.len = module->len;
 
 	mods->idx = collector->mod_no-1;
 
@@ -211,14 +227,16 @@ static inline module_stats* __add_stat_module( char *module, int unsafe)
 
 module_stats *add_stat_module(char *module)
 {
-	return __add_stat_module(module, 0);
+	str smodule;
+	init_str(&smodule, module);
+	return __add_stat_module(&smodule, 0);
 }
 
 
 /***************** Init / Destroy STATS support functions *******************/
 
 
-int clone_pv_stat_name(str *name, str *clone)
+int clone_pv_stat_name(const str *name, str *clone)
 {
 	clone->s = (char*)shm_malloc(name->len);
 	if (clone->s==NULL) {
@@ -315,6 +333,7 @@ void destroy_stats_collector(void)
 {
 	stat_var *stat;
 	stat_var *tmp_stat;
+	group_stats *grp, *grp_next;
 	int i, idx;
 
 #ifdef NO_ATOMIC_OPS
@@ -358,6 +377,13 @@ void destroy_stats_collector(void)
 		if (collector->amodules)
 			shm_free(collector->amodules);
 
+		/* destroy the stat's groups */
+		for (grp = collector->groups; grp; grp = grp_next) {
+			grp_next = grp->next;
+			shm_free(grp->vars);
+			shm_free(grp);
+		}
+
 		/* destroy the RW lock */
 		if (collector->rwl)
 			lock_destroy_rw( (rw_lock_t *)collector->rwl);
@@ -380,16 +406,14 @@ int stats_are_ready(void)
  * Note: certain statistics (e.g. shm statistics) require different handling,
  * hence the <unsafe> parameter
  */
-int register_stat2( char *module, char *name, stat_var **pvar,
+static int __register_stat(str *module, str *name, stat_var **pvar,
 					unsigned short flags, void *ctx, int unsafe)
 {
 	module_stats* mods;
 	stat_var **shash;
 	stat_var *stat;
 	stat_var *it;
-	str smodule;
 	int hash;
-	int name_len;
 
 	if (module==0 || name==0 || pvar==0) {
 		LM_ERR("invalid parameters module=%p, name=%p, pvar=%p \n",
@@ -397,18 +421,16 @@ int register_stat2( char *module, char *name, stat_var **pvar,
 		goto error;
 	}
 
-	name_len = strlen(name);
-
 	if(flags&STAT_NOT_ALLOCATED){
 		stat = *pvar;
 		goto do_register;
 	}
 	stat = unsafe ?
 			(stat_var*)shm_malloc_unsafe(sizeof(stat_var) +
-			(((flags&STAT_SHM_NAME)==0)?name_len:0))
+			(((flags&STAT_SHM_NAME)==0)?name->len:0))
 			:
 			(stat_var*)shm_malloc(sizeof(stat_var) +
-			(((flags&STAT_SHM_NAME)==0)?name_len:0));
+			(((flags&STAT_SHM_NAME)==0)?name->len:0));
 
 	if (stat==0) {
 		LM_ERR("no more shm memory\n");
@@ -427,7 +449,7 @@ int register_stat2( char *module, char *name, stat_var **pvar,
 #ifdef NO_ATOMIC_OPS
 		*(stat->u.val) = 0;
 #else
-		atomic_set(stat->u.val,0);
+		atomic_init(stat->u.val, 0);
 #endif
 		*pvar = stat;
 	} else {
@@ -436,9 +458,7 @@ int register_stat2( char *module, char *name, stat_var **pvar,
 
 	/* is the module already recorded? */
 do_register:
-	smodule.s = module;
-	smodule.len = strlen(module);
-	mods = get_stat_module(&smodule);
+	mods = get_stat_module(module);
 	if (mods==0) {
 		mods = __add_stat_module(module, unsafe);
 		if (mods==0) {
@@ -450,16 +470,16 @@ do_register:
 	/* fill the stat record */
 	stat->mod_idx = mods->idx;
 
-	stat->name.len = name_len;
+	stat->name.len = name->len;
 	if ( (flags&STAT_SHM_NAME)==0 ) {
 		if(flags&STAT_NOT_ALLOCATED)
-			stat->name.s = shm_malloc_unsafe(name_len);
+			stat->name.s = shm_malloc_unsafe(name->len);
 		else
 			stat->name.s = (char*)(stat+1);
 			
-		memcpy(stat->name.s, name, name_len);
+		memcpy(stat->name.s, name->s, name->len);
 	} else {
-		stat->name.s = name;
+		stat->name.s = name->s;
 	}
 	stat->flags = flags;
 	stat->context = ctx;
@@ -551,36 +571,23 @@ error:
 	return -1;
 }
 
+int register_stat2( char *module, char *name, stat_var **pvar,
+					unsigned short flags, void *ctx, int unsafe)
+{
+	str smodule, sname;
+	init_str(&smodule, module);
+	init_str(&sname, name);
+	return __register_stat(&smodule, &sname, pvar, flags, ctx, unsafe);
+}
 
 int __register_dynamic_stat(str *group, str *name, stat_var **pvar)
 {
-	char *p;
-	int ret;
-	str nullgrp = {NULL, 0};
+	str dynamic_grp = str_init(DYNAMIC_MODULE_NAME);
 
 	if (!group)
-		group = &nullgrp;
+		group = &dynamic_grp;
 
-	/*FIXME - what we do here can be avoided - convert from str to
-	 * char and next function does the other way around - from char to
-	 * str - this is temporary, before fixing the register_stat2 function
-	 * prototype to accept str rather than char */
-	if ( (p=pkg_malloc(group->len + 1 + name->len + 1))==NULL ) {
-		LM_ERR("no more pkg mem (%d)\n",name->len + 1);
-		return -1;
-	}
-	memcpy(p, group->s, group->len);
-	p[group->len] = '\0';
-
-	memcpy(p + group->len + 1, name->s, name->len);
-	p[group->len + 1 + name->len] = '\0';
-
-	ret = register_stat(!*p ? DYNAMIC_MODULE_NAME : p, p + group->len + 1,
-	                    pvar, 0/*flags*/);
-
-	pkg_free(p);
-
-	return ret;
+	return __register_stat(group, name, pvar, 0/*flags*/, NULL, 0);
 }
 
 int register_dynamic_stat( str *name, stat_var **pvar)
@@ -608,7 +615,7 @@ int __register_module_stats(char *module, stat_export_t *stats, int unsafe)
 }
 
 
-stat_var* __get_stat( str *name, int mod_idx )
+stat_var* __get_stat( const str *name, int mod_idx )
 {
 	stat_var *stat;
 	int hash;
@@ -641,7 +648,7 @@ stat_var* __get_stat( str *name, int mod_idx )
 	return 0;
 }
 
-stat_var* get_stat( str *name )
+stat_var* get_stat( const str *name )
 {
 	return __get_stat(name, -1);
 }
@@ -691,6 +698,11 @@ int mi_print_stat(mi_item_t *resp_obj, str *mod, str *stat, unsigned long val)
 	return 0;
 }
 
+
+str *get_stat_module_name(stat_var *stat)
+{
+	return &collector->amodules[stat->mod_idx].name;
+}
 
 
 /***************************** MI STUFF ********************************/
@@ -950,6 +962,67 @@ static mi_response_t *mi_reset_stats(const mi_params_t *params,
 	return init_mi_result_ok();
 }
 
+void stats_mod_lock(module_stats *mod)
+{
+	if (mod->is_dyn)
+		lock_start_read((rw_lock_t *)collector->rwl);
+}
+
+void stats_mod_unlock(module_stats *mod)
+{
+	if (mod->is_dyn)
+		lock_stop_read((rw_lock_t *)collector->rwl);
+}
+
+group_stats *register_stats_group(const char *name)
+{
+	group_stats *grp = shm_malloc(sizeof *grp);
+	if (!grp)
+		return NULL;
+	memset(grp, 0, sizeof *grp);
+	init_str(&grp->name, name);
+	grp->vars = shm_malloc(sizeof(stat_var *));
+	if (!grp->vars) {
+		shm_free(grp);
+		return NULL;
+	}
+
+	grp->next = collector->groups;
+	collector->groups = grp;
+
+	return grp;
+}
+
+int add_stats_group(group_stats *grp, stat_var *stat)
+{
+	stat_var **stats = shm_realloc(grp->vars, sizeof(stat_var) * grp->no + 1);
+	if (!stats)
+		return -1;
+	grp->vars = stats;
+	grp->vars[grp->no++] = stat;
+	stat->flags |= STAT_HAS_GROUP;
+	return 0;
+}
+
+group_stats *get_stat_group(stat_var *stat)
+{
+	int s;
+	group_stats *grp;
+	for (grp = collector->groups; grp; grp = grp->next)
+		for (s = 0; s < grp->no; s++)
+			if (grp->vars[s] == stat)
+				return grp;
+	return NULL;
+}
+
+group_stats *find_stat_group(str *name)
+{
+	group_stats *grp;
+	for (grp = collector->groups; grp; grp = grp->next)
+		if (str_strcmp(name, &grp->name) == 0)
+			return grp;
+	return NULL;
+}
 
 #endif /*STATISTICS*/
 

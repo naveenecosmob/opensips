@@ -27,6 +27,7 @@
 #define CL_NODE_INFO_H
 
 #include "../../db/db.h"
+#include "../../rw_locking.h"
 #include "api.h"
 #include "clusterer.h"
 
@@ -69,6 +70,7 @@ struct node_info {
 	str description;
 	str url;
 	union sockaddr_union addr;
+	enum sip_protos proto;
 	str sip_addr;
 	int priority;                   /* priority to be chosen as next hop for same length paths */
 	int no_ping_retries;            /* maximum number of ping retries */
@@ -124,12 +126,13 @@ extern int db_mode;
 extern rw_lock_t *cl_list_lock;
 extern cluster_info_t **cluster_list;
 
-int update_db_state(int state);
+int update_db_state(int cluster_id, int node_id, int state);
 int load_db_info(db_func_t *dr_dbf, db_con_t* db_hdl, str *db_table, cluster_info_t **cl_list);
 void free_info(cluster_info_t *cl_list);
 
 int add_node_info(node_info_t **new_info, cluster_info_t **cl_list, int *int_vals,
 					str *str_vals);
+void remove_node_list(cluster_info_t *cl, node_info_t *node);
 
 int provision_neighbor(modparam_t type, void* val);
 int provision_current(modparam_t type, void *val);

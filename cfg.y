@@ -110,6 +110,7 @@
 #include "net/trans.h"
 #include "config.h"
 #include "mem/rpm_mem.h"
+#include "poll_types.h"
 
 #ifdef SHM_EXTRA_STATS
 #include "mem/module_info.h"
@@ -178,7 +179,7 @@ struct multi_str{
 	char *s;
 	struct multi_str* next;
 };
-#else 
+#else
 static struct multi_str *tmp_mod;
 #endif
 
@@ -283,6 +284,7 @@ extern int cfg_parse_only_routes;
 %token ENABLE_ASSERTS
 %token ABORT_ON_ASSERT
 %token LOGLEVEL
+%token LOGSTDOUT
 %token LOGSTDERROR
 %token LOGFACILITY
 %token LOGNAME
@@ -741,8 +743,12 @@ assign_stm: LOGLEVEL EQUAL snumber { IFOR();
 			}
 		| DEBUG_MODE EQUAL error
 			{ yyerror("boolean value expected for debug_mode"); }
-		| LOGSTDERROR EQUAL NUMBER 
-			/* in config-check or debug mode we force logging 
+		| LOGSTDOUT EQUAL NUMBER
+			/* may be useful when integrating 3rd party libraries */
+			{ IFOR(); log_stdout=$3; }
+		| LOGSTDOUT EQUAL error { yyerror("boolean value expected"); }
+		| LOGSTDERROR EQUAL NUMBER
+			/* in config-check or debug mode we force logging
 			 * to standard error */
 			{ IFOR(); if (!config_check && !debug_mode) log_stderr=$3; }
 		| LOGSTDERROR EQUAL error { yyerror("boolean value expected"); }
@@ -1035,12 +1041,12 @@ assign_stm: LOGLEVEL EQUAL snumber { IFOR();
 							server_signature=$3; }
 		| SERVER_SIGNATURE EQUAL error { yyerror("boolean value expected"); }
 		| SERVER_HEADER EQUAL STRING { IFOR();
-							server_header.s=$3;
-							server_header.len=strlen($3);
+							server_header->s=$3;
+							server_header->len=strlen($3);
 							}
 		| SERVER_HEADER EQUAL error { yyerror("string value expected"); }
-		| USER_AGENT_HEADER EQUAL STRING { user_agent_header.s=$3;
-									user_agent_header.len=strlen($3);
+		| USER_AGENT_HEADER EQUAL STRING { user_agent_header->s=$3;
+			user_agent_header->len=strlen($3);
 									}
 		| USER_AGENT_HEADER EQUAL error { yyerror("string value expected"); }
 		| PV_PRINT_BUF_SIZE EQUAL NUMBER { IFOR();
@@ -1116,7 +1122,7 @@ assign_stm: LOGLEVEL EQUAL snumber { IFOR();
 								}
 							}
 
-							mem_free_idx++;	
+							mem_free_idx++;
 
 							if(alloc_group_stat()){
 								YYABORT;
@@ -1136,24 +1142,24 @@ assign_stm: LOGLEVEL EQUAL snumber { IFOR();
 		| AUTO_ALIASES EQUAL error  { yyerror("number  expected"); }
 		| ADVERTISED_ADDRESS EQUAL listen_id { IFOR();
 								if ($3) {
-									default_global_address.s=$3;
-									default_global_address.len=strlen($3);
+									default_global_address->s=$3;
+									default_global_address->len=strlen($3);
 								}
 								}
 		| ADVERTISED_ADDRESS EQUAL error {yyerror("ip address or hostname "
 												"expected"); }
 		| ADVERTISED_PORT EQUAL NUMBER { IFOR();
 								tmp = int2str($3, &i_tmp);
-								if (i_tmp > default_global_port.len)
-									default_global_port.s =
-									pkg_realloc(default_global_port.s, i_tmp);
-								if (!default_global_port.s) {
+								if (i_tmp > default_global_port->len)
+									default_global_port->s =
+									pkg_realloc(default_global_port->s, i_tmp);
+								if (!default_global_port->s) {
 									LM_CRIT("cfg. parser: out of memory.\n");
 									YYABORT;
 								} else {
-									default_global_port.len = i_tmp;
-									memcpy(default_global_port.s, tmp,
-											default_global_port.len);
+									default_global_port->len = i_tmp;
+									memcpy(default_global_port->s, tmp,
+											default_global_port->len);
 								}
 								}
 		|ADVERTISED_PORT EQUAL error {yyerror("ip address or hostname "
@@ -1513,6 +1519,7 @@ timer_route_stm:  ROUTE_TIMER LBRACK route_name COMMA NUMBER RBRACK LBRACE actio
 							yyerror("Too many timer routes defined\n");
 							YYABORT;
 						}
+						sroutes->timer[i_tmp].name = $3;
 						sroutes->timer[i_tmp].interval = $5;
 						push($8, &sroutes->timer[i_tmp].a);
 					}
@@ -1525,7 +1532,7 @@ event_route_stm: ROUTE_EVENT LBRACK route_name RBRACK LBRACE actions RBRACE {
 						if (i_tmp==-1) YYABORT;
 						push($6, &sroutes->event[i_tmp].a);
 					}
-		| ROUTE_EVENT error { yyerror("invalid timer_route statement"); }
+		| ROUTE_EVENT error { yyerror("invalid event_route statement"); }
 	;
 
 
@@ -2254,7 +2261,7 @@ static void yyerror(char* s)
 	cfg_dump_backtrace();
 	LM_CRIT("parse error in %s:%d:%d-%d: %s\n",
 			get_cfg_file_name, line, startcolumn, column, s);
-	cfg_dump_context(get_cfg_file_name, line, startcolumn, column);
+	_cfg_dump_context(get_cfg_file_name, line, startcolumn, column, 1);
 	cfg_errors++;
 }
 

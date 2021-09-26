@@ -532,21 +532,45 @@ void* find_param_export(char* mod, char* name, modparam_t type)
 }
 
 
+static void destroy_module(struct sr_module *m, int skip_others)
+{
+	struct sr_module_dep *dep;
+
+	if (!m)
+		return;
+
+	/* destroy the modules in script load order using backwards iteration */
+	if (!skip_others)
+		destroy_module(m->next, 0);
+
+	if (m->destroy_done || !m->exports)
+		return;
+
+	/* make sure certain modules get destroyed before this one */
+	for (dep = m->sr_deps_destroy; dep; dep = dep->next)
+		if (!dep->mod->destroy_done)
+			destroy_module(dep->mod, 1);
+
+	if (m->init_done && m->exports->destroy_f)
+		m->exports->destroy_f();
+
+	m->destroy_done = 1;
+}
+
 
 void destroy_modules(void)
 {
-	struct sr_module* t, *foo;
+	struct sr_module *mod, *aux;
 
-	t = modules;
-	while (t) {
-		foo = t->next;
-		if (t->init_done && t->exports && t->exports->destroy_f)
-			t->exports->destroy_f();
-		pkg_free(t);
-		t = foo;
+	destroy_module(modules, 0);
+	free_module_dependencies(modules);
+
+	mod = modules;
+	while (mod) {
+		aux = mod;
+		mod = mod->next;
+		pkg_free(aux);
 	}
-
-	modules = NULL;
 }
 
 
@@ -555,33 +579,39 @@ void destroy_modules(void)
    which modules are loaded in config file
 */
 
-static int init_mod_child( struct sr_module* m, int rank, char *type )
+static int init_mod_child( struct sr_module* m, int rank, char *type,
+                          int skip_others)
 {
-	if (m) {
-		/* iterate through the list; if error occurs,
-		   propagate it up the stack */
-		if (init_mod_child(m->next, rank, type)!=0)
-			return -1;
+	struct sr_module_dep *dep;
 
-		if (m->exports && m->exports->init_child_f) {
-			LM_DBG("type=%s, rank=%d, module=%s\n",
-					type, rank, m->exports->name);
-			if (m->exports->init_child_f(rank)<0) {
-				LM_ERR("failed to initializing module %s, rank %d\n",
-					m->exports->name,rank);
+	if (!m || m->init_child_done)
+		return 0;
+
+	/* iterate through the list; if error occurs,
+	   propagate it up the stack */
+	if (!skip_others && init_mod_child(m->next, rank, type, 0) != 0)
+		return -1;
+
+	for (dep = m->sr_deps_init; dep; dep = dep->next)
+		if (!dep->mod->init_child_done)
+			if (init_mod_child(dep->mod, rank, type, 1) != 0)
 				return -1;
-			} else {
-				/* module correctly initialized */
-				return 0;
-			}
-		}
 
-		/* no init function -- proceed with success */
+	if (m->init_child_done)
 		return 0;
-	} else {
-		/* end of list */
-		return 0;
+
+	if (m->exports && m->exports->init_child_f) {
+		LM_DBG("type=%s, rank=%d, module=%s\n",
+				type, rank, m->exports->name);
+		if (m->exports->init_child_f(rank)<0) {
+			LM_ERR("failed to initializing module %s, rank %d\n",
+				m->exports->name,rank);
+			return -1;
+		}
 	}
+
+	m->init_child_done = 1;
+	return 0;
 }
 
 
@@ -608,7 +638,7 @@ int init_child(int rank)
 			type = "UNKNOWN";
 	}
 
-	return init_mod_child(modules, rank, type);
+	return init_mod_child(modules, rank, type, 0);
 }
 
 
@@ -637,7 +667,7 @@ static int init_mod( struct sr_module* m, int skip_others)
 			return 0;
 
 		/* make sure certain modules get loaded before this one */
-		for (dep = m->sr_deps; dep; dep = dep->next) {
+		for (dep = m->sr_deps_init; dep; dep = dep->next) {
 			if (!dep->mod->init_done)
 				if (init_mod(dep->mod, 1) != 0)
 					return -1;
@@ -705,11 +735,7 @@ int init_modules(void)
 		}
 	}
 
-	ret = init_mod(modules, 0);
-
-	free_module_dependencies(modules);
-
-	return ret;
+	return init_mod(modules, 0);
 }
 
 
@@ -769,6 +795,7 @@ int start_module_procs(void)
 	struct sr_module *m;
 	unsigned int n;
 	unsigned int l;
+	unsigned int flags;
 	int x;
 
 	for( m=modules ; m ; m=m->next) {
@@ -789,9 +816,18 @@ int start_module_procs(void)
 			for ( l=0; l<m->exports->procs[n].no ; l++) {
 				LM_DBG("forking process \"%s\"/%d for module %s\n",
 					m->exports->procs[n].name, l, m->exports->name);
-				x = internal_fork( m->exports->procs[n].name,
-						((m->exports->procs[n].flags&PROC_FLAG_HAS_IPC) ?
-						0 : OSS_PROC_NO_IPC)|OSS_PROC_IS_EXTRA, TYPE_MODULE );
+				/* conver the module proc flags to internal proc flgas
+				 * NOTE that the PROC_FLAG_NEEDS_SCRIPT automatically
+				 * assumes PROC_FLAG_HAS_IPC - IPC is needed for script
+				 * reload */
+				flags = OSS_PROC_IS_EXTRA;
+				if (m->exports->procs[n].flags&PROC_FLAG_NEEDS_SCRIPT)
+					flags |= OSS_PROC_NEEDS_SCRIPT;
+				else
+				if ( (m->exports->procs[n].flags&PROC_FLAG_HAS_IPC)==0)
+					flags |= OSS_PROC_NO_IPC;
+				x = internal_fork( m->exports->procs[n].name, flags,
+					TYPE_MODULE );
 				if (x<0) {
 					LM_ERR("failed to fork process \"%s\"/%d for module %s\n",
 						m->exports->procs[n].name, l, m->exports->name);

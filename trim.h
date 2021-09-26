@@ -25,12 +25,13 @@
 #include "str.h"
 
 /* whitespace */
-static inline int is_ws(unsigned char ch)
+static inline int
+is_ws(unsigned char ch)
 {
-	const unsigned int mask = (1 << (' ' - 1)) | (1 << ('\r' - 1)) |
-	    (1 << ('\n' - 1)) | (1 << ('\t' - 1));
-	ch--;
-	return ch < ' ' && ((1 << ch) & mask);
+    const unsigned int mask = (1 << (' ' - 1)) | (1 << ('\r' - 1)) |
+        (1 << ('\n' - 1)) | (1 << ('\t' - 1));
+    ch--;
+    return ch < ' ' && ((1 << ch) & mask);
 }
 
 /*

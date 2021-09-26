@@ -28,14 +28,14 @@
 
 
 #include "msg_parser.h"
+#include "digest/digest_parser.h"
 
-#define AUTHENTICATE_MD5	(1<<0)
-#define AUTHENTICATE_MD5SESS	(1<<1)
-#define AUTHENTICATE_STALE	(1<<2)
-#define QOP_AUTH		(1<<3)
-#define QOP_AUTH_INT		(1<<4)
+#define AUTHENTICATE_STALE	(1<<0)
+#define QOP_AUTH		(1<<1)
+#define QOP_AUTH_INT		(1<<2)
 
 struct authenticate_body {
+	alg_t algorithm;
 	int flags;
 	str realm;
 	str domain;
@@ -51,20 +51,33 @@ struct authenticate_body {
 /*
  * WWW/Proxy-Authenticate header field parser
  */
+struct match_auth_hf_desc;
+typedef int (*match_auth_hf_function)(const struct authenticate_body *,
+    const struct match_auth_hf_desc *);
+
+struct match_auth_hf_desc {
+	match_auth_hf_function matchf;
+	const void *argp;
+};
+
+#define MATCH_AUTH_HF(_fn, _argp) (const struct match_auth_hf_desc){ \
+    .matchf = (_fn), .argp = (_argp)}
+
 int parse_proxy_authenticate_header(struct sip_msg *msg,
-                                    struct authenticate_body **picked_auth);
+    const struct match_auth_hf_desc *md, struct authenticate_body **picked_auth);
 int parse_www_authenticate_header(struct sip_msg *msg,
-                                  struct authenticate_body **picked_auth);
+    const struct match_auth_hf_desc *md, struct authenticate_body **picked_auth);
 int parse_authenticate_header(struct hdr_field *authenticate,
-                              struct authenticate_body **picked_auth);
+    const struct match_auth_hf_desc *md, struct authenticate_body **picked_auth);
 static inline int _parse_authenticate_header(struct hdr_field *authenticate)
 {
 	struct authenticate_body *_;
-	return parse_authenticate_header(authenticate, &_);
+	return parse_authenticate_header(authenticate, NULL, &_);
 }
 
 
-int parse_qop_value(str *val, struct authenticate_body *auth);
+int parse_qop_value(str val, struct authenticate_body *auth);
+int parse_authenticate_body(str body, struct authenticate_body *auth);
 
 void free_authenticate(struct authenticate_body *authenticate_b);
 

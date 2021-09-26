@@ -28,6 +28,8 @@
 #include "../../evi/evi.h"
 #include "../../map.h"
 #include "../../ipc.h"
+#include "../../ut.h"
+#include "../../lib/csv.h"
 
 #include "dr_load.h"
 #include "prefix_tree.h"
@@ -75,6 +77,13 @@ static char *dr_probe_sock_s = NULL;
 struct socket_info *dr_probe_sock = NULL;
 static int* probing_reply_codes = NULL;
 static int probing_codes_no = 0;
+
+struct custom_rule_table {
+	str id;
+	str query;
+	struct custom_rule_table *next;
+};
+struct custom_rule_table *custom_rule_tables;
 
 /* reload controll parametere */
 static int no_concurrent_reload = 0;
@@ -264,9 +273,10 @@ static int use_next_gw(struct sip_msg* msg,
 #define DR_IFG_IDS_FLAG        (1<<3)
 #define DR_IFG_IGNOREPORT_FLAG (1<<4)
 #define DR_IFG_CARRIERID_FLAG  (1<<5)
+#define DR_IFG_CHECKPROTO_FLAG (1<<6)
 static int fix_gw_flags(void** param);
 static int _is_dr_gw(struct sip_msg* msg, struct head_db *current_partition,
-		int flags, int type, struct ip_addr *ip, unsigned int port);
+		int flags, int type, struct ip_addr *ip, unsigned int port, unsigned int proto);
 static int is_from_gw(struct sip_msg* msg, int *type, long flags,
 		pv_spec_t* gw_att, struct head_db *part);
 
@@ -280,6 +290,7 @@ static int dr_disable(struct sip_msg *req, struct head_db *current_partition);
 
 static int dr_match(struct sip_msg* msg, int *grp, long flags, str *number,
 		pv_spec_t* rule_att, struct head_db *part);
+int set_rule_tables_query(modparam_t type, void *val);
 
 
 mi_response_t *dr_reload_cmd(const mi_params_t *params,
@@ -477,6 +488,7 @@ static param_export_t params[] = {
 	{"probing_socket",   STR_PARAM, &dr_probe_sock_s          },
 	{"probing_reply_codes",STR_PARAM, &dr_probe_replies.s     },
 	{"persistent_state", INT_PARAM, &dr_persistent_state      },
+	{"rule_tables_query",STR_PARAM|USE_FUNC_PARAM, (void *)set_rule_tables_query },
 	{"no_concurrent_reload",INT_PARAM, &no_concurrent_reload  },
 	{"partition_id_pvar", STR_PARAM, &partition_pvar.s        },
 	{"cluster_id",        INT_PARAM, &dr_cluster_id           },
@@ -564,10 +576,6 @@ static module_dependency_t *get_deps_probing_interval(param_export_t *param)
 static dep_export_t deps = {
 	{ /* OpenSIPS module dependencies */
 		{ MOD_TYPE_SQLDB, NULL, DEP_ABORT },
-
-		/* if present, qrouting must first load its profiles,
-		 * so they can be looked up during DRCB_RLD_INIT_RULE */
-		{ MOD_TYPE_DEFAULT, "qrouting", DEP_SILENT },
 		{ MOD_TYPE_NULL, NULL, 0 },
 	},
 	{ /* modparam dependencies */
@@ -922,7 +930,7 @@ static void dr_state_flusher(struct head_db* hd)
 		LM_DBG("updating the state of gw <%.*s> to %d\n",
 				gw->id.len, gw->id.s, val_set.val.int_val);
 
-		CON_PS_REFERENCE(*hd->db_con) = gw_ps;
+		CON_SET_CURR_PS(*hd->db_con, gw_ps);
 		if ( (hd->db_funcs).update(*hd->db_con,&key_cmp,0,&val_cmp,&key_set,&val_set,1,1)<0 ) {
 			LM_ERR("DB update failed\n");
 		} else {
@@ -960,7 +968,7 @@ static void dr_state_flusher(struct head_db* hd)
 		LM_DBG("updating the state of cr <%.*s> to %d\n",
 				cr->id.len, cr->id.s, val_set.val.int_val);
 
-		CON_PS_REFERENCE(*hd->db_con) = cr_ps;
+		CON_SET_CURR_PS(*hd->db_con, cr_ps);
 		if ( (hd->db_funcs).update(*hd->db_con,&key_cmp,0,&val_cmp,&key_set,&val_set,1,1)<0 ) {
 			LM_ERR("DB update failed\n");
 		} else {
@@ -987,6 +995,24 @@ static void dr_state_timer(unsigned int ticks, void* param)
 	}
 }
 
+static inline int uses_rule_table_query(const struct head_db *dbh, str *query)
+{
+	struct custom_rule_table *it;
+
+	for (it = custom_rule_tables; it; it = it->next) {
+		if (!str_strcmp(&dbh->drr_table, &it->id)) {
+			if (query)
+				*query = it->query;
+			return 1;
+		}
+	}
+
+	if (query)
+		memset(query, 0, sizeof *query);
+
+	return 0;
+}
+
 /*
  * if none is successfully loaded return
  * -1, else return 0
@@ -995,16 +1021,24 @@ static void dr_state_timer(unsigned int ticks, void* param)
 static inline int dr_reload_data_head(struct head_db *hd,
                            str *part_name, int initial)
 {
+	db_con_t* db_hdl = *hd->db_con;
+	db_func_t *dr_dbf = &hd->db_funcs;
 	rt_data_t *new_data;
 	rt_data_t *old_data;
 	pgw_t *gw, *old_gw;
 	pcr_t *cr, *old_cr;
 	time_t rawtime;
-	struct head_cache *cache = NULL;
 	struct dr_prepare_part_params pp;
 
 	void **dest;
 	map_iterator_t it;
+
+	db_res_t* res = NULL;
+	db_row_t *row = NULL;
+	str *rules_tables=NULL;
+	int rules_no,i;
+	char *p;
+	str rule_table_query;
 
 	if (no_concurrent_reload) {
 		lock_get( hd->ref_lock->lock );
@@ -1027,10 +1061,70 @@ static inline int dr_reload_data_head(struct head_db *hd,
 	run_dr_cbs(DRCB_RLD_PREPARE_PART, &pp);
 
 	LM_INFO("loading drouting data!\n");
-	new_data = dr_load_routing_info(hd, dr_persistent_state);
-	if ( new_data==0 ) {
-		LM_CRIT("failed to load routing info\n");
-		goto error;
+
+	if (!uses_rule_table_query(hd, &rule_table_query)) {
+		new_data = dr_load_routing_info(hd, dr_persistent_state, &hd->drr_table, 1);
+		if (!new_data) {
+			LM_CRIT("failed to load routing info\n");
+			goto error;
+		}
+	} else {
+		rules_no=0;
+
+		if (dr_dbf->raw_query(db_hdl, &rule_table_query, &res) < 0) {
+			LM_ERR("Failed to run raw query to fetch rules tables\n");
+			return -1;
+		}
+
+		if (RES_ROW_N(res) == 0) {
+			LM_ERR("No rows returned by raw query\n");
+			goto multi_err1;
+		}
+
+		if (RES_COL_N(res) != 1) {
+			LM_ERR("Multiple columns returned by raw query = %d\n",RES_COL_N(res));
+			goto multi_err1;
+		}
+
+		rules_tables = pkg_malloc(RES_ROW_N(res)*sizeof(str));
+		if (!rules_tables) {
+			LM_ERR("No more pkg for storing raw query table names\n");
+			goto multi_err1;
+		}
+
+		memset(rules_tables, 0, RES_ROW_N(res)*sizeof(str));
+
+		for (i=0; i<RES_ROW_N(res); i++) {
+			row = RES_ROWS(res) + i;
+			p = (char*)VAL_STRING(ROW_VALUES(row));
+			if (VAL_NULL(ROW_VALUES(row)) || p==0 || p[0]==0) {
+				LM_WARN("Empty table - Skipping\n");
+				continue;
+			}
+
+			rules_tables[rules_no].len = strlen(p);
+			LM_DBG("found new table [%.*s]\n", rules_tables[rules_no].len, p);
+			rules_tables[rules_no].s = pkg_malloc(rules_tables[rules_no].len);
+			if (!rules_tables[rules_no].s) {
+				LM_ERR("No more pkg to allocate table name\n");
+				goto multi_err2;
+			}
+			memcpy(rules_tables[rules_no].s,p,rules_tables[rules_no].len);
+			rules_no++;
+		}
+
+		dr_dbf->free_result(db_hdl, res);
+
+		new_data = dr_load_routing_info(hd, dr_persistent_state, rules_tables,
+		                                rules_no);
+		if (!new_data) {
+			LM_CRIT("failed to load routing info\n");
+			goto error;
+		}
+
+		for (i=0; i<rules_no; i++)
+			pkg_free(rules_tables[i].s);
+		pkg_free(rules_tables);
 	}
 
 	lock_start_write( hd->ref_lock );
@@ -1095,11 +1189,15 @@ success:
 		hd->ongoing_reload = 0;
 	return 0;
 
+multi_err2:
+	for (i=0; i<rules_no; i++)
+		pkg_free(rules_tables[i].s);
+	pkg_free(rules_tables);
+multi_err1:
+	dr_dbf->free_result(db_hdl, res);
 error:
 	if (no_concurrent_reload)
 		hd->ongoing_reload = 0;
-	if (cache)
-		clean_head_cache(cache);
 	return -1;
 }
 
@@ -1455,6 +1553,9 @@ static int dr_init(void)
 			LM_INFO("starting drouting with empty cache\n");
 		else
 			LM_INFO("starting drouting with cache head=%p\n", dr_cache);
+
+		LM_NOTICE("using %ld MB of restart-persistent memory, allocator: %s\n",
+		          rpm_mem_size/1024/1024, mm_str(mem_allocator_rpm));
 	}
 
 	/* register dr callbacks for sorting */
@@ -1751,7 +1852,8 @@ static int dr_init(void)
 			goto error_cfg;
 		}
 
-		if(db_check_table_version(&db_part->db_funcs, *db_part->db_con,
+		if(!uses_rule_table_query(db_part, NULL) &&
+				db_check_table_version(&db_part->db_funcs, *db_part->db_con,
 					&db_part->drr_table, DRR_TABLE_VER) < 0) {
 			LM_ERR("error during table version check (dr_rules table \'%.*s\',"
 				" for partition \'%.*s\')\n", db_part->drr_table.len,
@@ -1927,6 +2029,8 @@ static int db_connect_head(struct head_db *x) {
 static void rpc_dr_reload_data(int sender_id, void *unused)
 {
 	dr_reload_data(1);
+
+	dr_cluster_sync();
 }
 
 
@@ -2030,7 +2134,7 @@ static mi_response_t *mi_dr_get_partition(const mi_params_t *params,
 
 	if((*partition = get_partition(&part_name)) == NULL) {
 		LM_ERR("Partition not found\n");
-		return init_mi_error(404, MI_SSTR("Partition not found\n"));
+		return init_mi_error(404, MI_SSTR("Partition not found"));
 	}
 
 	return NULL;
@@ -2620,14 +2724,20 @@ static int weight_based_sort(pgw_list_t *pgwl, int size, unsigned short *idx)
 		}
 		if (weight_sum) {
 			/* randomly select number */
-			rand_no = (unsigned int)(weight_sum*((float)rand()/RAND_MAX));
+			rand_no = (unsigned int)(weight_sum*((float)rand()/(float)RAND_MAX));
 			LM_DBG("random number is %d\n",rand_no);
 			/* select the element */
 			for( i=first ; i<size ; i++ )
 				if (running_sum[i]>rand_no) break;
 			if (i==size) {
-				LM_CRIT("bug in weight sort\n");
-				return -1;
+				LM_CRIT("bug in weight sort, first=%u, size=%u, rand_no=%u, total weight=%u\n",
+					first, size, rand_no, weight_sum);
+				for(i=first; i<size;i++)
+					LM_CRIT("i %d, idx %u, weight %u, running sum %u\n",
+						i, idx[i], pgwl[idx[i]].weight, running_sum[i]);
+				/* try to recover here by picking the last gw */
+				i = size - 1;
+				// return -1;
 			}
 		} else {
 			/* randomly select index */
@@ -3058,7 +3168,7 @@ search_again:
 
 	if (rt_info->route_idx && (rt_idx=get_script_route_ID_by_name
 	(rt_info->route_idx, sroutes->request, RT_NO))!=-1) {
-		fret = run_top_route( sroutes->request[rt_idx].a, msg );
+		fret = run_top_route( sroutes->request[rt_idx], msg );
 		if (fret&ACT_FL_DROP) {
 			/* drop the action */
 			LM_DBG("script route %s drops routing "
@@ -3800,6 +3910,7 @@ static int fix_gw_flags(void** param)
 				case 'p': flags |= DR_IFG_PREFIX_FLAG; break;
 				case 'i': flags |= DR_IFG_IDS_FLAG; break;
 				case 'n': flags |= DR_IFG_IGNOREPORT_FLAG; break;
+				case 'r': flags |= DR_IFG_CHECKPROTO_FLAG; break;
 				case 'c': flags |= DR_IFG_CARRIERID_FLAG; break;
 				default: LM_WARN("unsupported flag %c \n",s->s[i]);
 			}
@@ -3832,11 +3943,12 @@ static int prefix_username(struct sip_msg* msg, str *pri)
 }
 
 
-static int gw_matches_ip(pgw_t *pgwa, struct ip_addr *ip, unsigned short port)
+static int gw_matches_ip(pgw_t *pgwa, struct ip_addr *ip, unsigned short port, unsigned short proto)
 {
 	unsigned short j;
 	for ( j=0 ; j<pgwa->ips_no ; j++)
-		if ( (pgwa->ports[j]==0 || port==0 || pgwa->ports[j]==port) &&
+		if ( (pgwa->ports[j]==0 || pgwa->ports[j]==1 || port==0 || pgwa->ports[j]==port) &&
+			(pgwa->protos[j]==0 || proto==0 || pgwa->protos[j]==proto) &&
 				ip_addr_cmp( &pgwa->ips[j], ip) ) return 1;
 	return 0;
 }
@@ -3848,7 +3960,7 @@ static int gw_matches_ip(pgw_t *pgwa, struct ip_addr *ip, unsigned short port)
  */
 static int _is_dr_gw(struct sip_msg* msg,
 		struct head_db *current_partition,
-		int flags, int type, struct ip_addr *ip, unsigned int port)
+		int flags, int type, struct ip_addr *ip, unsigned int port, unsigned int proto)
 {
 	pgw_t *pgwa = NULL;
 	pcr_t *pcr = NULL;
@@ -3875,7 +3987,10 @@ static int _is_dr_gw(struct sip_msg* msg,
 			pgwa = (pgw_t*)*dest;
 
 			if( (type<0 || type==pgwa->type) &&
-			gw_matches_ip( pgwa, ip, (flags&DR_IFG_IGNOREPORT_FLAG)?0:port )) {
+			gw_matches_ip( pgwa, ip,
+					(flags&DR_IFG_IGNOREPORT_FLAG)?0:port,
+					(flags&DR_IFG_CHECKPROTO_FLAG)?proto:0)
+				) {
 				/* strip ? */
 				if ( (flags&DR_IFG_STRIP_FLAG) && pgwa->strip>0)
 					strip_username(msg, pgwa->strip);
@@ -3960,7 +4075,7 @@ static int is_from_gw(struct sip_msg* msg, int *type, long flags,
 		/* if we got here we have the wildcard operator */
 		for (it = head_db_start; it; it = it->next) {
 			ret = _is_dr_gw(msg, it, (int)flags, type?*type:-1,
-				&msg->rcv.src_ip, msg->rcv.src_port);
+				&msg->rcv.src_ip, msg->rcv.src_port, msg->rcv.proto);
 			if (ret > 0) {
 				if (partition_pvar.s) {
 					pv_val.rs = it->partition;
@@ -3977,14 +4092,14 @@ static int is_from_gw(struct sip_msg* msg, int *type, long flags,
 	}
 
 	return _is_dr_gw(msg, part, (int)flags, type?*type:-1,
-		&msg->rcv.src_ip, msg->rcv.src_port);
+		&msg->rcv.src_ip, msg->rcv.src_port, msg->rcv.proto);
 }
 
 
 /*
  * Extracts the IP & port corresponding to the msg destination
  */
-static int _uri_to_ip_port(str *uri, struct ip_addr *ip, int *port)
+static int _uri_to_ip_port(str *uri, struct ip_addr *ip, int *port, int *proto)
 {
 	struct sip_uri puri;
 	struct hostent* he;
@@ -4007,6 +4122,7 @@ static int _uri_to_ip_port(str *uri, struct ip_addr *ip, int *port)
 	hostent2ip_addr( ip, he, 0);
 
 	*port = puri.port_no;
+	*proto = puri.proto;
 
 	return 0;
 }
@@ -4020,8 +4136,9 @@ static int goes_to_gw(struct sip_msg* msg, int *type, long flags,
 	struct head_db * it;
 	struct ip_addr ip;
 	int port;
+	int proto;
 
-	if (_uri_to_ip_port( GET_NEXT_HOP(msg), &ip, &port)!=0) {
+	if (_uri_to_ip_port( GET_NEXT_HOP(msg), &ip, &port, &proto)!=0) {
 		LM_ERR("failed to extract IP/port from msg destination\n");
 		return -1;
 	}
@@ -4031,7 +4148,7 @@ static int goes_to_gw(struct sip_msg* msg, int *type, long flags,
 	if (part==NULL) {
 		/* if we got here we have the wildcard operator */
 		for (it = head_db_start; it; it = it->next) {
-			ret = _is_dr_gw(msg, it, (int)flags, type?*type:-1, &ip, port);
+			ret = _is_dr_gw(msg, it, (int)flags, type?*type:-1, &ip, port, proto);
 			if (ret > 0) {
 				if (partition_pvar.s) {
 					pv_val.rs = it->partition;
@@ -4047,7 +4164,7 @@ static int goes_to_gw(struct sip_msg* msg, int *type, long flags,
 		return ret;
 	}
 
-	return _is_dr_gw(msg, part, (int)flags, type?*type:-1, &ip, port);
+	return _is_dr_gw(msg, part, (int)flags, type?*type:-1, &ip, port, proto);
 }
 
 
@@ -4059,8 +4176,9 @@ static int dr_is_gw(struct sip_msg* msg, str *uri, int *type, long flags,
 	struct head_db * it;
 	struct ip_addr ip;
 	int port;
+	int proto;
 
-	if (_uri_to_ip_port( uri, &ip, &port)!=0) {
+	if (_uri_to_ip_port( uri, &ip, &port, &proto)!=0) {
 		LM_ERR("failed to extract IP/port from uri <%.*s>\n", uri->len,uri->s);
 		return -1;
 	}
@@ -4070,7 +4188,7 @@ static int dr_is_gw(struct sip_msg* msg, str *uri, int *type, long flags,
 	if (part==NULL) {
 		/* if we got here we have the wildcard operator */
 		for (it = head_db_start; it; it = it->next) {
-			ret = _is_dr_gw(msg, it, (int)flags, type?*type:-1, &ip, port);
+			ret = _is_dr_gw(msg, it, (int)flags, type?*type:-1, &ip, port, proto);
 			if (ret > 0) {
 				if (partition_pvar.s) {
 					pv_val.rs = it->partition;
@@ -4086,7 +4204,7 @@ static int dr_is_gw(struct sip_msg* msg, str *uri, int *type, long flags,
 		return ret;
 	}
 
-	return _is_dr_gw(msg, part, (int)flags, type?*type:-1, &ip, port);
+	return _is_dr_gw(msg, part, (int)flags, type?*type:-1, &ip, port, proto);
 }
 
 
@@ -4779,15 +4897,17 @@ static int get_config_from_db(void) {
 		value = ROW_VALUES(rows_db_config+i);
 		add_head_config();
 		for( j=0; j<nr_cols_db_config; j++) {
-			if( VAL_NULL(value+j) ) {
+			if ( (j !=1) && VAL_NULL(value+j) ) {
 				LM_DBG("Row %d is NULL\n", i);
-			} else if( VAL_TYPE(value+j) == DB_STR || VAL_TYPE(value+j) == DB_STRING ) {
+			} else if ( (j == 1) || VAL_TYPE(value+j) == DB_STR || VAL_TYPE(value+j) == DB_STRING ) {
 				if(VAL_TYPE(value+j) == DB_STR) {
 					ans_col = VAL_STR(value+j);
 				} else if(VAL_TYPE(value+j) == DB_STRING) {
 					ans_col.s = (char*)VAL_STRING(value+j);
 					ans_col.len = strlen(ans_col.s);
 				}
+				if ( (j == 1) && ((VAL_NULL(value+j) || ans_col.len == 0)) )
+					ans_col = db_partitions_url;
 				if (populate_head_config(head_start, ans_col, j) < 0 )
 					LM_ERR("Column from partition table not recognized; will continue\n");
 
@@ -5072,4 +5192,46 @@ mi_response_t *mi_dr_reload_status_1(const mi_params_t *params,
 	}
 
 	return resp;
+}
+
+int set_rule_tables_query(modparam_t type, void *_mapping)
+{
+	str_list *tokens;
+	struct custom_rule_table *crt;
+	str input;
+	char *mapping;
+
+	mapping = pkg_strdup((char *)_mapping);
+	if (!mapping) {
+		LM_ERR("oom\n");
+		return -1;
+	}
+
+	init_str(&input, mapping);
+
+	if (!q_memchr(mapping, ':', input.len)) {
+		LM_ERR("invalid format, must be '<name> : <query>'\n");
+		return -1;
+	}
+
+	tokens = __parse_csv_record(&input, 0, ':');
+	if (!tokens) {
+		LM_ERR("failed to parse input: %.*s\n", input.len, input.s);
+		return -1;
+	}
+
+	crt = pkg_malloc(sizeof *crt);
+	if (!crt) {
+		LM_ERR("oom\n");
+		return -1;
+	}
+	memset(crt, 0, sizeof *crt);
+
+	crt->id = tokens->s;
+	crt->query = tokens->next->s;
+
+	add_last(crt, custom_rule_tables);
+	free_csv_record(tokens);
+
+	return 0;
 }

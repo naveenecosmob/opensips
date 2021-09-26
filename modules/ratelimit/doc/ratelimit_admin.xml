@@ -365,14 +365,13 @@ modparam("ratelimit", "db_prefix", "ratelimit_")
 		<title><varname>repl_buffer_threshold</varname> (string)</title>
 		<para>
 		Used to specify the length of the buffer used by the binary
-		replication, in bytes. Usually this should be big enough to hold
-		as much data as possible, but small enough to avoid UDP
-		fragmentation. The recommended value is the smallest MTU between
-		all the replication instances.
+		replication, in bytes, when a flush should be performed - the pipes
+		gathered until then should be sent on the network. This is used
+		to avoid using large amount of memory for pipes replication.
 		</para>
 		<para>
 		<emphasis>
-			Default value is 1400 bytes.
+			Default value is 32767 bytes.
 		</emphasis>
 		</para>
 		<example>
@@ -672,6 +671,30 @@ modparam("ratelimit", "slot_period", 100)
 		</para>
 		<programlisting  format="linespecific">
 		opensips-cli -x mi rl_list gw_10.0.0.1
+		</programlisting>
+	</section>
+	<section id="mi_rl_dump_pipe" xreflabel="rl_dump_pipe">
+		<title>
+		<function moreinfo="none">rl_dump_pipe</function>
+		</title>
+		<para>
+		Exposes all the details about the current runtime data (specific to the
+		pipe's algorithm) of a pipe. Currently make sense for SBT.
+		</para>
+		<para>
+		Name: <emphasis>rl_dump_pipe</emphasis>
+		</para>
+		<para>Parameters:</para>
+		<itemizedlist>
+			<listitem><para>
+			<emphasis>pipe</emphasis> - indicates the name of the pipe.
+			</para></listitem>
+		</itemizedlist>
+ 		<para>
+		MI FIFO Command Format:
+		</para>
+		<programlisting  format="linespecific">
+		opensips-cli -x mi rl_dump_pipe gw_10.0.0.1
 		</programlisting>
 	</section>
 	<section id="mi_rl_reset_pipe" xreflabel="rl_reset_pipe">

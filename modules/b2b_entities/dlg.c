@@ -37,7 +37,7 @@
 #include "../../parser/sdp/sdp.h"
 #include "../../locking.h"
 #include "../../script_cb.h"
-#include "../uac_auth/uac_auth.h"
+#include "../../lib/digest_auth/digest_auth.h"
 #include "../presence/hash.h"
 #include "../../action.h"
 #include "../../trim.h"
@@ -46,7 +46,7 @@
 #include "b2be_db.h"
 #include "b2be_clustering.h"
 
-#define BUF_LEN              1024
+#define BUF_LEN              65535
 
 str ack = str_init(ACK);
 str bye = str_init(BYE);
@@ -57,6 +57,20 @@ b2b_dlg_t* current_dlg= NULL;
 struct b2b_callback *b2b_trig_cbs, *b2b_recv_cbs;
 
 static str storage_cap = str_init("b2b-storage-bin");
+
+
+
+/* This is the "transaction created" callback for the UAC transactions,
+ * used for enabling the tracing
+ */
+void b2b_trace_uac(struct cell* t, void *param)
+{
+	struct b2b_tracer *tracer = (struct b2b_tracer*)param;
+
+	/* call the tracing function for this transaction */
+	tracer->f( NULL /*msg*/, t, tracer->param);
+}
+
 
 void print_b2b_dlg(b2b_dlg_t *dlg)
 {
@@ -469,7 +483,8 @@ void set_dlg_state(b2b_dlg_t* dlg, int meth)
 			dlg->state= B2B_TERMINATED;
 			break;
 		case METHOD_ACK:
-			dlg->state= B2B_ESTABLISHED;
+			if (dlg->state != B2B_MODIFIED || !dlg->uac_tran)
+				dlg->state= B2B_ESTABLISHED;
 			break;
 		default:
 			break;
@@ -596,15 +611,19 @@ static void run_create_cb_all(struct b2b_callback *cb, int etype)
 	unsigned int hsize;
 
 	if (etype == B2B_CLIENT) {
-		htable = server_htable;
-		hsize = server_hsize;
-	} else {
 		htable = client_htable;
 		hsize = client_hsize;
+	} else {
+		htable = server_htable;
+		hsize = server_hsize;
 	}
 
 	for (i = 0; i < hsize; i++)
 		for (dlg = htable[i].first; dlg; dlg = dlg->next) {
+			if (dlg->mod_name.len != cb->mod_name.len ||
+				memcmp(dlg->mod_name.s, cb->mod_name.s, cb->mod_name.len))
+				continue;
+
 			if (dlg->storage.len > 0) {
 				if (bin_init(&storage, &storage_cap, B2BE_STORAGE_BIN_TYPE,
 					B2BE_STORAGE_BIN_VERS, 0) < 0) {
@@ -667,6 +686,7 @@ int b2b_register_cb(b2b_cb_t cb, int cb_type, str *mod_name)
 	return 0;
 }
 
+
 int b2b_prescript_f(struct sip_msg *msg, void *uparam)
 {
 	str b2b_key;
@@ -691,6 +711,7 @@ int b2b_prescript_f(struct sip_msg *msg, void *uparam)
 	int b2b_ev = -1;
 	bin_packet_t storage;
 	struct b2b_context *ctx;
+	int b2b_cb_flags = 0;
 
 	/* check if a b2b request */
 	if (parse_headers(msg, HDR_EOH_F, 0) < 0)
@@ -785,14 +806,17 @@ int b2b_prescript_f(struct sip_msg *msg, void *uparam)
 		LM_DBG("Received a PRACK - send 200 reply\n");
 		str reason={"OK", 2};
 		/* send 200 OK and exit */
-		tmb.t_reply(msg, 200, &reason);
+		tmb.t_newtran( msg );
 		tm_tran = tmb.t_gett();
+		// FIXME run here the transactional tracing, but we do not have
+		// the matching dlg, in order to grab the tracing function
+		tmb.t_reply(msg, 200, &reason);
 		if(tm_tran && tm_tran!=T_UNDEFINED)
 			tmb.unref_cell(tm_tran);
 
 		/* No need to apply lumps */
 		if(req_routeid > 0)
-			run_top_route(sroutes->request[req_routeid].a, msg);
+			run_top_route(sroutes->request[req_routeid], msg);
 
 		goto done;
 	}
@@ -845,7 +869,8 @@ search_dialog:
 		   a RURI that may have been changed in script (before invoking the
 		   B2B module), while the CANCEL has the original RURI (as received)
 		*/
-		dlg = b2bl_search_iteratively(&callid, &from_tag, NULL/*&ruri*/, hash_index);
+		dlg = b2bl_search_iteratively(&callid, &from_tag, NULL/*&ruri*/,
+			hash_index);
 		if(dlg == NULL)
 		{
 			lock_release(&server_htable[hash_index].lock);
@@ -880,6 +905,9 @@ search_dialog:
 			return SCB_DROP_MSG;
 		}
 
+		/* start tracing for the CANCEL transaction */
+		b2b_run_tracer( dlg, msg, tmb.t_gett());
+
 		if(tmb.t_reply(msg, 200, &reply_text) < 0)
 		{
 			LM_ERR("failed to send reply for CANCEL\n");
@@ -909,8 +937,9 @@ search_dialog:
 	}
 
 	b2b_key = to_tag;
-	/* check if the to tag has the b2b key format -> meaning that it is a server request */
-	if(b2b_key.s && b2b_parse_key(&b2b_key, &hash_index, &local_index, NULL) >= 0)
+	/* check if the to tag has the b2b key format -> meaning
+	 * that it is a server request */
+	if(b2b_key.s && b2b_parse_key(&b2b_key, &hash_index, &local_index,NULL)>=0)
 	{
 		LM_DBG("Received a b2b server request [%.*s]\n",
 					msg->first_line.u.request.method.len,
@@ -919,7 +948,8 @@ search_dialog:
 	}
 	else
 	{
-		/* check if the callid is in b2b format -> meaning that this is a client request */
+		/* check if the callid is in b2b format -> meaning
+		 * that this is a client request */
 		b2b_key = msg->callid->body;
 		if(b2b_parse_key(&b2b_key, &hash_index, &local_index, NULL) >= 0)
 		{
@@ -940,7 +970,8 @@ search_dialog:
 				/* for server UPDATE sent before dialog confirmed */
 				table = server_htable;
 				hash_index = core_hash(&callid, &from_tag, server_hsize);
-				dlg = b2bl_search_iteratively(&callid, &from_tag,NULL, hash_index);
+				dlg = b2bl_search_iteratively(&callid, &from_tag, NULL,
+					hash_index);
 				if(dlg == NULL)
 				{
 					lock_release(&server_htable[hash_index].lock);
@@ -969,6 +1000,11 @@ search_dialog:
 					LM_ERR("No dialog found, callid= [%.*s], method=%.*s\n",
 						callid.len, callid.s,msg->first_line.u.request.method.len,
 						msg->first_line.u.request.method.s);
+			} else {
+				tmb.t_newtran(msg);
+				tm_tran = tmb.t_gett();
+				if (tm_tran && tm_tran!=T_UNDEFINED)
+					tmb.unref_cell(tm_tran);
 			}
 			lock_release(&table[hash_index].lock);
 			return SCB_RUN_ALL;
@@ -1014,7 +1050,7 @@ logic_notify:
 	if(req_routeid > 0)
 	{
 		lock_release(&table[hash_index].lock);
-		run_top_route(sroutes->request[req_routeid].a, msg);
+		run_top_route(sroutes->request[req_routeid], msg);
 		if (b2b_apply_lumps(msg))
 		{
 			if (parse_from_header(msg) < 0)
@@ -1054,6 +1090,10 @@ logic_notify:
 		}
 
 		tm_tran = tmb.t_gett();
+
+		/* start tracing for this transaction */
+		b2b_run_tracer( dlg, msg, tm_tran);
+	
 		if(method_value != METHOD_ACK)
 		{
 			if(method_value == METHOD_UPDATE)
@@ -1095,8 +1135,12 @@ logic_notify:
 		}
 		else
 		{
-			if(!tm_tran || tm_tran==T_UNDEFINED)
+			if(!tm_tran || tm_tran==T_UNDEFINED) {
 				tm_tran = tmb.t_get_e2eackt();
+				if (!tm_tran || tm_tran==T_UNDEFINED)
+					/* ACK for a negative reply */
+					b2b_cb_flags |= B2B_NOTIFY_FL_ACK_NEG;
+			}
 
 			if(tm_tran && tm_tran!=T_UNDEFINED)
 				tmb.unref_cell(tm_tran);
@@ -1131,14 +1175,14 @@ logic_notify:
 	dlg_state = dlg->state;
 	lock_release(&table[hash_index].lock);
 
-	b2b_cback(msg, &b2b_key, B2B_REQUEST, param.s?&param:0);
+	b2b_cback(msg, &b2b_key, B2B_REQUEST, param.s?&param:0, b2b_cb_flags);
 
 	if(param.s)
 		pkg_free(param.s);
 
 	lock_get(&table[hash_index].lock);
 
-	if(etype!=B2B_NONE && dlg_state>B2B_CONFIRMED)
+	if(dlg_state>B2B_CONFIRMED)
 	{
 		/* search the dialog */
 		for(aux_dlg = table[hash_index].first; aux_dlg; aux_dlg = aux_dlg->next)
@@ -1155,12 +1199,12 @@ logic_notify:
 	}
 
 	if (B2BE_SERIALIZE_STORAGE()) {
-		if (etype != B2B_NONE && dlg_state == B2B_ESTABLISHED) {
+		if (dlg_state == B2B_ESTABLISHED) {
 			b2b_ev = B2B_EVENT_ACK;
 
 			b2b_run_cb(dlg, hash_index, etype, B2BCB_TRIGGER_EVENT, b2b_ev,
 				&storage, serialize_backend);
-		} else if (etype != B2B_NONE && dlg_state == B2B_TERMINATED) {
+		} else if (dlg_state == B2B_TERMINATED) {
 			b2b_ev = B2B_EVENT_DELETE;
 
 			b2b_run_cb(dlg, hash_index, etype, B2BCB_TRIGGER_EVENT, b2b_ev,
@@ -1169,7 +1213,7 @@ logic_notify:
 	}
 
 	current_dlg = 0;
-	if(b2be_db_mode == WRITE_THROUGH && etype!=B2B_NONE && dlg_state>B2B_CONFIRMED)
+	if(b2be_db_mode == WRITE_THROUGH && dlg_state>B2B_CONFIRMED)
 	{
 		if(b2be_db_update(dlg, etype) < 0)
 			LM_ERR("Failed to update in database\n");
@@ -1576,7 +1620,7 @@ int b2b_send_reply(b2b_rpl_data_t* rpl_data)
 		{
 			if(code < 300)
 				dlg->state = B2B_CONFIRMED;
-			else
+			else if (!dlg->uac_tran)
 				dlg->state= B2B_TERMINATED;
 			UPDATE_DBFLAG(dlg);
 		}
@@ -1759,8 +1803,7 @@ void b2b_entity_delete(enum b2b_entity_type et, str* b2b_key,
 	lock_get(&table[hash_index].lock);
 	if(dlginfo)
 		dlg = b2b_search_htable_dlg(table, hash_index, local_index,
-		dlginfo->totag.s?&dlginfo->totag:NULL,
-		dlginfo->fromtag.s?&dlginfo->fromtag:NULL, &dlginfo->callid);
+		&dlginfo->totag, &dlginfo->fromtag, &dlginfo->callid);
 	else
 		dlg = b2b_search_htable(table, hash_index, local_index);
 
@@ -1914,6 +1957,9 @@ int b2b_send_indlg_req(b2b_dlg_t* dlg, enum b2b_entity_type et,
 		tmb.setlocalTholder(&dlg->uac_tran);
 	}
 
+	/* start tracing for this transaction */
+	if (dlg->tracer)
+		b2b_arm_uac_tracing( td, dlg->tracer);
 
 	if (no_cb)
 	{
@@ -2017,7 +2063,7 @@ int b2b_send_request(b2b_req_data_t* req_data)
 	else
 	{
 		dlg = b2b_search_htable_dlg(table, hash_index, local_index,
-		totag.s?&totag:NULL, fromtag.s?&fromtag:NULL, &dlginfo->callid);
+				&totag, &fromtag, &dlginfo->callid);
 	}
 	if(dlg== NULL)
 	{
@@ -2030,15 +2076,20 @@ int b2b_send_request(b2b_req_data_t* req_data)
 
 	if(dlg->state == B2B_TERMINATED)
 	{
-		LM_ERR("Can not send request [%.*s] for entity type [%d] "
-			"for dlg[%p]->[%.*s] in terminated state\n",
-			method->len, method->s, et,
-			dlg, b2b_key->len, b2b_key->s);
 		lock_release(&table[hash_index].lock);
-		if(method_value==METHOD_BYE || method_value==METHOD_CANCEL)
+		if(method_value==METHOD_BYE || method_value==METHOD_CANCEL) {
+			LM_DBG("Can not send request [%.*s] for entity type [%d] "
+				"for dlg[%p]->[%.*s] in terminated state\n",
+				method->len, method->s, et,
+				dlg, b2b_key->len, b2b_key->s);
 			return 0;
-		else
+		} else {
+			LM_ERR("Can not send request [%.*s] for entity type [%d] "
+				"for dlg[%p]->[%.*s] in terminated state\n",
+				method->len, method->s, et,
+				dlg, b2b_key->len, b2b_key->s);
 			return -1;
+		}
 	}
 
 	if(b2breq_complete_ehdr(req_data->extra_headers, req_data->client_headers,
@@ -2083,7 +2134,7 @@ int b2b_send_request(b2b_req_data_t* req_data)
 	/* send request */
 	if(method_value == METHOD_CANCEL)
 	{
-		if(dlg->state < B2B_CONFIRMED)
+		if(dlg->state != B2B_CONFIRMED)
 		{
 			if(dlg->uac_tran)
 			{
@@ -2094,8 +2145,11 @@ int b2b_send_request(b2b_req_data_t* req_data)
 					LM_ERR("Invite trasaction not found\n");
 					goto error;
 				}
+				// FIXME - tracing: how do we get to the cancel transaction?
 				ret = tmb.t_cancel_trans( inv_t, &ehdr);
 				tmb.unref_cell(inv_t);
+				if (dlg->state > B2B_CONFIRMED)
+					method_value = METHOD_INVITE;
 			}
 			else
 			{
@@ -2105,10 +2159,7 @@ int b2b_send_request(b2b_req_data_t* req_data)
 		}
 		else
 		{
-			if(dlg->state == B2B_CONFIRMED)
-			{
-				b2b_send_indlg_req(dlg, et, b2b_key, &ack, &ehdr, 0, req_data->no_cb);
-			}
+			b2b_send_indlg_req(dlg, et, b2b_key, &ack, &ehdr, 0, req_data->no_cb);
 			ret = b2b_send_indlg_req(dlg, et, b2b_key, &bye, &ehdr, req_data->body, req_data->no_cb);
 			method_value = METHOD_BYE;
 		}
@@ -2370,11 +2421,15 @@ int b2b_send_req(b2b_dlg_t* dlg, enum b2b_entity_type etype,
 			dlg->cseq[CALLER_LEG]--;
 	}
 
+	/* start tracing for this transaction */
+	if (dlg->tracer)
+		b2b_arm_uac_tracing( td, dlg->tracer);
+
 	/* send request */
 	result= tmb.t_request_within
 		(method,            /* method*/
 		extra_headers,      /* extra headers*/
-		NULL,               /* body*/
+		body,               /* body*/
 		td,                 /* dialog structure*/
 		NULL,               /* callback function*/
 		NULL,               /* callback parameter*/
@@ -2503,13 +2558,15 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 	struct uac_credential* crd;
 	struct authenticate_body *auth = NULL;
 	static struct authenticate_nc_cnonce auth_nc_cnonce;
-	HASHHEX response;
+	struct digest_auth_response response;
 	str *new_hdr;
 	char status_buf[INT2STR_MAX_LEN];
+	static str sdp_ct = str_init("Content-Type: application/sdp\r\n");
 	int old_route_type;
 	bin_packet_t storage;
 	int b2b_ev = -1;
 	struct b2b_context *ctx;
+	int b2b_cb_flags = 0;
 
 	to_hdr_parsed.param_lst = from_hdr_parsed.param_lst = NULL;
 
@@ -2597,8 +2654,34 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 		callid = msg->callid->body;
 		from_tag = ((struct to_body*)msg->from->parsed)->tag_value;
 	} else if (ps->req) {
-		from_tag = ((struct to_body*)ps->req->from->parsed)->tag_value;
-		to_tag = ((struct to_body*)ps->req->to->parsed)->tag_value;
+		if (!(struct to_body*)ps->req->from->parsed) {
+			parse_to(ps->req->from->body.s,
+					ps->req->from->body.s + ps->req->from->body.len + 1,
+					&from_hdr_parsed);
+			if (from_hdr_parsed.error == PARSE_ERROR) {
+				from_tag.s = NULL;
+				from_tag.len = 0;
+			} else {
+				from_tag = from_hdr_parsed.tag_value;
+				free_to_params(&from_hdr_parsed);
+			}
+		} else {
+			from_tag = ((struct to_body*)ps->req->from->parsed)->tag_value;
+		}
+		if (!(struct to_body*)ps->req->to->parsed) {
+			parse_to(ps->req->to->body.s,
+					ps->req->to->body.s + ps->req->to->body.len + 1,
+					&to_hdr_parsed);
+			if (to_hdr_parsed.error == PARSE_ERROR) {
+				to_tag.s = NULL;
+				to_tag.len = 0;
+			} else {
+				to_tag = to_hdr_parsed.tag_value;
+				free_to_params(&to_hdr_parsed);
+			}
+		} else {
+			to_tag = ((struct to_body*)ps->req->to->parsed)->tag_value;
+		}
 		callid = ps->req->callid->body;
 	} else {
 		to_tag.s = NULL;
@@ -2702,7 +2785,8 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 				}
 				if(dlg->callid.s==0 || dlg->callid.len==0)
 					dlg->callid = msg->callid->body;
-				if(b2b_send_req(dlg, etype, leg, &ack, 0,
+				if(b2b_send_req(dlg, etype, leg, &ack,
+							(dlg->ack_sdp.s?&sdp_ct:0),
 							(dlg->ack_sdp.s?&dlg->ack_sdp:0)) < 0)
 				{
 					LM_ERR("Failed to send ACK request\n");
@@ -2782,10 +2866,12 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 			switch(statuscode)
 			{
 			case WWW_AUTH_CODE:
-				parse_www_authenticate_header(msg, &auth);
+				parse_www_authenticate_header(msg,
+				    DAUTH_AHFM_ANYSUP, &auth);
 				break;
 			case PROXY_AUTH_CODE:
-				parse_proxy_authenticate_header(msg, &auth);
+				parse_proxy_authenticate_header(msg,
+				    DAUTH_AHFM_ANYSUP, &auth);
 				break;
 			}
 			if(uac_auth_loaded && auth && dlg->state == B2B_NEW)
@@ -2799,11 +2885,18 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 					}
 					memset(&auth_nc_cnonce, 0,
 							sizeof(struct authenticate_nc_cnonce));
-					uac_auth_api._do_uac_auth(&msg_body, &t->method,
-							&t->uac[0].uri, crd, auth, &auth_nc_cnonce, response);
+					if (uac_auth_api._do_uac_auth(&msg_body, &t->method,
+							&t->uac[0].uri, crd, auth, &auth_nc_cnonce,
+							&response) != 0)
+					{
+						LM_ERR("failed in do_uac_auth()\n");
+						dlg->state = B2B_TERMINATED;
+						lock_release(&htable[hash_index].lock);
+						goto error;
+					}
 					new_hdr = uac_auth_api._build_authorization_hdr(statuscode,
 							&t->uac[0].uri, crd, auth,
-							&auth_nc_cnonce, response);
+							&auth_nc_cnonce, &response);
 					if (!new_hdr)
 					{
 						LM_ERR("failed to build auth hdr\n");
@@ -2835,7 +2928,7 @@ void b2b_tm_cback(struct cell *t, b2b_table htable, struct tmcb_params *ps)
 					if(reply_routeid > 0) {
 						msg->flags = t->uac[0].br_flags;
 						swap_route_type(old_route_type, ONREPLY_ROUTE);
-						run_top_route(sroutes->request[reply_routeid].a, msg);
+						run_top_route(sroutes->request[reply_routeid], msg);
 						set_route_type(old_route_type);
 						b2b_apply_lumps(msg);
 					}
@@ -2971,6 +3064,7 @@ dummy_reply:
 				}
 				pkg_free(leg);
 			}
+			b2b_cb_flags |= B2B_NOTIFY_FL_TERMINATED;
 			goto done;
 		}
 
@@ -2995,6 +3089,7 @@ dummy_reply:
 			new_dlg->prev = dlg->prev;
 			new_dlg->add_dlginfo = dlg->add_dlginfo;
 			new_dlg->last_method = dlg->last_method;
+			new_dlg->tracer = dlg->tracer;
 
 //			dlg = b2b_search_htable(htable, hash_index, local_index);
 			if(dlg->prev)
@@ -3098,7 +3193,8 @@ dummy_reply:
 					if(dlg->callid.s==0 || dlg->callid.len==0)
 						dlg->callid = msg->callid->body;
 					/* send an ACK followed by BYE */
-					if(b2b_send_req(dlg, etype, dlg->legs, &ack, 0,
+					if(b2b_send_req(dlg, etype, dlg->legs, &ack,
+								(dlg->ack_sdp.s?&sdp_ct:0),
 								dlg->ack_sdp.s?&dlg->ack_sdp:0) < 0)
 					{
 						LM_ERR("Failed to send ACK request\n");
@@ -3153,7 +3249,7 @@ dummy_reply:
 		}
 
 		LM_DBG("DLG state = %d\n", dlg->state);
-		if(dlg->state== B2B_MODIFIED && statuscode >= 200 && statuscode <300)
+		if(dlg->state== B2B_MODIFIED && statuscode >= 200)
 		{
 			LM_DBG("switched the state CONFIRMED [%p]\n", dlg);
 			dlg->state = B2B_CONFIRMED;
@@ -3178,12 +3274,12 @@ done1:
 	if(reply_routeid > 0) {
 		msg->flags = t->uac[0].br_flags;
 		swap_route_type(old_route_type, ONREPLY_ROUTE);
-		run_top_route(sroutes->request[reply_routeid].a, msg);
+		run_top_route(sroutes->request[reply_routeid], msg);
 		set_route_type(old_route_type);
 		if (msg != FAKED_REPLY) b2b_apply_lumps(msg);
 	}
 
-	b2b_cback(msg, b2b_key, B2B_REPLY, param.s?&param:0);
+	b2b_cback(msg, b2b_key, B2B_REPLY, param.s?&param:0, b2b_cb_flags);
 	if(param.s)
 	{
 		pkg_free(param.s);
@@ -3311,8 +3407,14 @@ int b2breq_complete_ehdr(str* extra_headers, str *client_headers,
 		memcpy(ehdr.s, extra_headers->s, extra_headers->len);
 		ehdr.len = extra_headers->len;
 	}
-	ehdr.len += sprintf(ehdr.s+ ehdr.len, "Contact: <%.*s>\r\n",
-		local_contact->len, local_contact->s);
+	if (local_contact->s[0] == '<') {
+		/* already enclosed */
+		ehdr.len += sprintf(ehdr.s+ ehdr.len, "Contact: %.*s\r\n",
+			local_contact->len, local_contact->s);
+	} else {
+		ehdr.len += sprintf(ehdr.s+ ehdr.len, "Contact: <%.*s>\r\n",
+			local_contact->len, local_contact->s);
+	}
 	if (client_headers && client_headers->len && client_headers->s)
 	{
 		memcpy(ehdr.s + ehdr.len, client_headers->s, client_headers->len);

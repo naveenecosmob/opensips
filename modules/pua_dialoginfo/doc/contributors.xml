@@ -21,10 +21,10 @@
 	<row>
 		<entry>1. </entry>
 		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">53</entry>
-		<entry align="center">31</entry>
-		<entry align="center">1175</entry>
-		<entry align="center">712</entry>
+		<entry align="center">56</entry>
+		<entry align="center">33</entry>
+		<entry align="center">1203</entry>
+		<entry align="center">742</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
@@ -101,7 +101,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>), Stanislaw Pitucha, Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Zero King (<ulink url="https://github.com/l2dy">@l2dy</ulink>), Aron Podrigal (<ulink url="https://github.com/ar45">@ar45</ulink>).</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>), Stanislaw Pitucha, Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Zero King (<ulink url="https://github.com/l2dy">@l2dy</ulink>), Aron Podrigal (<ulink url="https://github.com/ar45">@ar45</ulink>).</para>
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -129,7 +129,7 @@
 	<row>
 		<entry>1. </entry>
 		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">Jan 2009 - Jul 2020</entry>
+		<entry align="center">Jan 2009 - May 2021</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
@@ -179,7 +179,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Anca Vamanu, Vallimamod Abdullah, Stanislaw Pitucha, Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>), Klaus Darilion.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Anca Vamanu, Vallimamod Abdullah, Stanislaw Pitucha, Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>), Klaus Darilion.</para>
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

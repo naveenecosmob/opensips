@@ -3,7 +3,7 @@ acc:7
 active_watchers:12
 address:5
 b2b_entities:2
-b2b_logic:3
+b2b_logic:4
 b2b_sca:1
 cachedb:2
 carrierfailureroute:2
@@ -41,14 +41,14 @@ load_balancer:3
 location:1013
 missed_calls:5
 presentity:5
-pua:8
+pua:9
 qr_profiles:1
 rc_clients:1
 rc_demo_ratesheet:1
 rc_ratesheets:1
 rc_vendors:1
 re_grp:2
-registrant:2
+registrant:3
 rls_presentity:1
 rls_watchers:2
 route_tree:2
@@ -58,7 +58,7 @@ silo:6
 sip_trace:5
 smpp:1
 speed_dial:3
-subscriber:7
+subscriber:8
 tls_mgm:3
 uri:2
 userblacklist:2

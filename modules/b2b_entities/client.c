@@ -78,7 +78,8 @@ static void generate_tag(str* tag, str* src, str* callid)
  *	*/
 #define HASH_SIZE 1<<23
 str* client_new(client_info_t* ci,b2b_notify_t b2b_cback,
-		b2b_add_dlginfo_t add_dlginfo, str *mod_name, str* param)
+		b2b_add_dlginfo_t add_dlginfo, str *mod_name, str* param,
+		struct b2b_tracer *tracer)
 {
 	int result;
 	b2b_dlg_t* dlg;
@@ -144,6 +145,7 @@ str* client_new(client_info_t* ci,b2b_notify_t b2b_cback,
 	}
 	dlg->b2b_cback = b2b_cback;
 	dlg->add_dlginfo = add_dlginfo;
+	dlg->tracer = tracer;
 
 	CONT_COPY(dlg, dlg->mod_name, (*mod_name));
 
@@ -157,11 +159,10 @@ str* client_new(client_info_t* ci,b2b_notify_t b2b_cback,
 	dlg->cseq[CALLER_LEG] =(ci->cseq?ci->cseq:1);
 	dlg->send_sock = ci->send_sock;
 
-	srand(get_uticks());
 	random_info.s = int2str(rand(), &random_info.len);
 
 	dlg->send_sock = ci->send_sock;
-	dlg->id = core_hash(&from_tag, random_info.s?&random_info:0, HASH_SIZE);
+	dlg->id = core_hash(&from_tag, random_info.s?&random_info:NULL, HASH_SIZE);
 
 	/* callid must have the special format */
 	dlg->db_flag = NO_UPDATEDB_FLAG;
@@ -227,6 +228,9 @@ str* client_new(client_info_t* ci,b2b_notify_t b2b_cback,
 	td.avps = ci->avps;
 
 	tmb.setlocalTholder(&dlg->uac_tran);
+
+	if (dlg->tracer)
+		b2b_arm_uac_tracing( &td, dlg->tracer);
 
 	/* send request */
 	result= tmb.t_request_within

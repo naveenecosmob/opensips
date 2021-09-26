@@ -75,6 +75,7 @@
 #define CCC_CID_COL "cid"
 
 #define CC_CALLS_TABLE_NAME "cc_calls"
+#define CC_CALLS_TABLE_VERSION  2
 #define CCQ_STATE_COL       "state"
 #define CCQ_IGCBACK_COL     "ig_cback"
 #define CCQ_NOREJ_COL       "no_rej"
@@ -258,6 +259,11 @@ int init_cc_db(const str *db_url)
 		return -1;
 	}
 
+	if(db_check_table_version(&cc_dbf, cc_db_handle,
+	&cc_calls_table_name, CC_CALLS_TABLE_VERSION) < 0) {
+		LM_ERR("error during CALLS table version check.\n");
+		return -1;
+	}
 	return 0;
 }
 
@@ -914,8 +920,7 @@ int cc_write_cdr( str *un, str *fid, str *aid, int type, int rt, int wt, int tt,
 	vals[10].type = DB_INT;
 	vals[10].val.int_val = cid;
 
-	CON_PS_REFERENCE(cc_acc_db_handle) = &my_ps;
-
+	CON_SET_CURR_PS(cc_acc_db_handle, &my_ps);
 	if (cc_acc_dbf.insert( cc_acc_db_handle, columns, vals, 11) < 0) {
 		LM_ERR("CDR insert failed\n");
 		return -1;

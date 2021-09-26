@@ -17,7 +17,7 @@
 		Note that an &osips; instance can belong to multiple clusters, communicating and establishing the topology separately for each one. In order to provision this in the database or the script, each node has an unique ID at global level, which can be referenced in each cluster.
 	</para>
 	<para>
-		An &osips; instance can dynamically learn all the nodes in the cluster that are not provisioned in the database. For instances that do not load any node info from the DB, it is enough to define at least one neigbour in the script in order to discover all the cluster components. 
+		An &osips; instance can dynamically learn all the nodes in the cluster if database provisioning is not desired. It is enough to define at least one neigbour in the script in order to discover all the cluster components.
 	</para>
 	</section>
 
@@ -114,6 +114,10 @@ modparam("clusterer", "my_node_id", 1)
 				and <xref linkend="param_neighbor_node_info"/>). A value of <quote>0</quote>
 				means that DB is not used and the cluster topology in terms of node
 				information will be discovered dynamically at runtime.
+			</para>
+			<para>
+				If DB mode is enabled, only the nodes defined in the database will be
+				accepted by this instance.
 			</para>
             <para>
 		<emphasis>
@@ -750,13 +754,12 @@ cluster_broadcast_req($var(cl_id), $var(share_data));
 						is made against, with the possible values of:
 						<itemizedlist>
 							<listitem>
-								<para><emphasis>bin</emphasis> - node's BIN interface listener;</para>
+								<para><emphasis>"sip"</emphasis> (default) - a node's DB provisioned SIP address</para>
 							</listitem>
 							<listitem>
-								<para><emphasis>sip</emphasis> - node's DB provisioned SIP address.</para>
+								<para><emphasis>"bin"</emphasis> - a node's BIN interface listener</para>
 							</listitem>
 						</itemizedlist>
-						<para>The default behaviour is to compare against the SIP address.</para>
 					</para></listitem>
 				</itemizedlist>
 				<para>
@@ -880,8 +883,8 @@ $ opensips-cli -x mi clusterer_list_topology
 		<function moreinfo="none">clusterer_set_status</function>
 		</title>
 		<para>
-                Sets the status(Enabled/Disabled) of the local node in a specified cluster. A disabled node does not send any messages and ignores received ones thus appearing as a failed node in the topology.
-                </para>
+            Sets the status(Enabled/Disabled) of a node. If the local instance is disabled, the node will not send any messages and ignore received ones thus appearing as a failed node in the topology (from the other node's perspective). If a different node is disabled, the specified node will simply be ignored by the local instance in terms of sending/receiving any messages, as if no longer part of the topology.
+        </para>
 		<para>
 		Name: <emphasis>clusterer_set_status</emphasis>
 		</para>
@@ -889,6 +892,10 @@ $ opensips-cli -x mi clusterer_list_topology
 		<itemizedlist>
 			<listitem><para>
 			<emphasis>cluster_id</emphasis> - indicates the id of the cluster.
+			</para></listitem>
+			<listitem><para>
+			<emphasis>node_id</emphasis> (optional) - indicates the id of the node to be disabled.
+			If missing, the local instance will be disalbed.
 			</para></listitem>
             <listitem><para>
 			<emphasis>status</emphasis> - indicates the new status(0 - Disabled, 1 - Enabled).
@@ -898,7 +905,45 @@ $ opensips-cli -x mi clusterer_list_topology
 		MI FIFO Command Format:
 		</para>
 		<programlisting  format="linespecific">
+		#disable the local instance
 		opensips-cli -x mi clusterer_set_status 1 0
+		#disable node ID 3
+		opensips-cli -x mi clusterer_set_status 1 3 0
+		</programlisting>
+	</section>
+
+		<section id="mi_clusterer_remove_node" xreflabel="clusterer_remove_node">
+		<title>
+		<function moreinfo="none">clusterer_remove_node</function>
+		</title>
+		<para>
+			Removes a node from the cluster's topology. It is enough to run the function
+			on a single node in order to remove the target node from all the other
+			nodes in the cluster. If the node to be removed is running when triggering
+			this function, it will be automatically disabled (equivalent to running
+			<xref linkend="mi_clusterer_set_status"/> on that specific node).
+        </para>
+        <para>
+			This function can only be used when <xref linkend="param_db_mode"/> is set to
+			<emphasis>0</emphasis> (disabled).
+        </para>
+		<para>
+		Name: <emphasis>clusterer_remove_node</emphasis>
+		</para>
+		<para>Parameters:</para>
+		<itemizedlist>
+			<listitem><para>
+			<emphasis>cluster_id</emphasis> - cluster ID
+			</para></listitem>
+            <listitem><para>
+			<emphasis>node_id</emphasis> - ID of the node to be removed.
+			</para></listitem>
+		</itemizedlist>
+		<para>
+		MI FIFO Command Format:
+		</para>
+		<programlisting  format="linespecific">
+		opensips-cli -x mi clusterer_remove_node 1 3
 		</programlisting>
 	</section>
 
@@ -997,11 +1042,13 @@ $ opensips-cli -x mi clusterer_list_cap
             "Capabilities": [
                 {
                     "name": "dialog-dlg-repl",
-                    "state": "Ok"
+                    "state": "Ok",
+                    "enabled": "yes"
                 },
                 {
                     "name": "dialog-prof-repl",
-                    "state": "Ok"
+                    "state": "Ok",
+                    "enabled": "yes"
                 }
             ]
         }
@@ -1010,6 +1057,40 @@ $ opensips-cli -x mi clusterer_list_cap
 </programlisting>
 		</example>
 		</section>
+
+		<section id="mi_clusterer_set_cap_status" xreflabel="clusterer_set_cap_status">
+		<title>
+		<function moreinfo="none">clusterer_set_cap_status</function>
+		</title>
+		<para>
+            Sets the status(Enabled/Disabled) of a capability. If a capability is disabled, the node will not send any replication/sync messages belonging to that capability. Likewise, received messages will be dropped. Also, the cabability will transition to a "not synced" state and the node will no longer be able to be a donor for syncing.
+        </para>
+		<para>
+		Name: <emphasis>clusterer_set_cap_status</emphasis>
+		</para>
+		<para>Parameters:</para>
+		<itemizedlist>
+			<listitem><para>
+			<emphasis>cluster_id</emphasis> - the id of the cluster
+			</para></listitem>
+			<listitem><para>
+			<emphasis>capability</emphasis> - name of the capability, as listed by
+			<xref linkend="mi_clusterer_list_cap"/>
+			</para></listitem>
+            <listitem><para>
+			<emphasis>status</emphasis> - indicates the new status(0 - Disabled, 1 - Enabled).
+			</para></listitem>
+		</itemizedlist>
+		<para>
+		MI FIFO Command Format:
+		</para>
+		<programlisting  format="linespecific">
+		#disable dialog replication in cluster 1
+		opensips-cli -x mi clusterer_set_cap_status 1 dialog-dlg-repl 0
+		#enable dialog profile replication in cluster 2
+		opensips-cli -x mi clusterer_set_cap_status 2 dialog-prof-repl 1
+		</programlisting>
+	</section>
 
 		<section id='mi_clusterer_shtag_set_active' xreflabel="clusterer_shtag_set_active">
 		<title><function moreinfo="none">clusterer_shtag_set_active</function></title>

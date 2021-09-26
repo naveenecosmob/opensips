@@ -5,22 +5,26 @@ Maintainer: Răzvan Crainea <razvan@opensips.org>
 Build-Depends: bison,
                debhelper (>= 9),
                default-libmysqlclient-dev | libmysqlclient-dev,
-               dh-systemd (>= 1.5),
+               debhelper (>= 9.20160709) | dh-systemd (>= 1.5),
                dpkg-dev (>= 1.16.1.1),
                flex,
                libconfuse-dev,
                libcurl4-gnutls-dev,
                libdb-dev (>= 4.6.19),
+               libfdcore6 (>= 1.2.1) | base-files,
+               libfdproto6 (>= 1.2.1) | base-files,
+               libfreediameter-dev (>= 1.2.1) | base-files,
                libexpat1-dev,
                libmaxminddb-dev | libgeoip-dev (>= 1.4.4),
                libhiredis-dev,
                libjson-c-dev,
+               librdkafka-dev,
                libldap2-dev,
                liblua5.1-0-dev,
                libmemcached-dev,
                libmicrohttpd-dev,
-               libbson-dev | base-files (<< 9.4),
-               libmongoc-dev | base-files (<< 9.4),
+               libbson-dev | base-files,
+               libmongoc-dev | base-files,
                libncurses5-dev,
                libpcre3-dev,
                libperl-dev,
@@ -188,6 +192,17 @@ Description: Radius modules for OpenSIPS
  per second even on low-budget hardware.
  .
  This package provides the RADIUS driver for the AAA API from OpenSIPS.
+
+Package: opensips-diameter-module
+Architecture: any
+Multi-Arch: same
+Depends: opensips (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Description: Diameter module for OpenSIPS
+ OpenSIPS is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, OpenSIPS can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This package provides a DIAMETER driver for the AAA API from OpenSIPS.
 
 Package: opensips-unixodbc-module
 Architecture: any
@@ -382,8 +397,7 @@ Description: B2B User Agent modules for OpenSIPS
  server. Written entirely in C, OpenSIPS can handle thousands calls
  per second even on low-budget hardware.
  .
- This package provides modules for B2BUA support in OpenSIPS. Both the
- implementation and control (XML based scenario description) are included.
+ This package provides old style XML module for B2BUA support in OpenSIPS.
 
 Package: opensips-dbhttp-module
 Architecture: any
@@ -545,11 +559,40 @@ Description: TLS management module for OpenSIPS
  .
  This package provides support for TLS management for OpenSIPS.
 
+Package: opensips-tls-openssl-module
+Architecture: any
+Multi-Arch: same
+Depends: opensips (= ${binary:Version}),
+         opensips-tlsmgm-module (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: TLS transport module for OpenSIPS
+ OpenSIPS is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, OpenSIPS can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This package provides the OpenSSL implementation for TLS in OpenSIPS.
+
+Package: opensips-tls-wolfssl-module
+Architecture: any
+Multi-Arch: same
+Depends: opensips (= ${binary:Version}),
+         opensips-tlsmgm-module (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: TLS transport module for OpenSIPS
+ OpenSIPS is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, OpenSIPS can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This package provides the wolfSSL implementation for TLS in OpenSIPS.
+
 Package: opensips-tls-module
 Architecture: any
 Multi-Arch: same
 Depends: opensips (= ${binary:Version}),
          opensips-tlsmgm-module (= ${binary:Version}),
+         opensips-tls-openssl-module (= ${binary:Version}) | opensips-tls-wolfssl-module (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Description: TLS transport module for OpenSIPS
@@ -564,6 +607,7 @@ Architecture: any
 Multi-Arch: same
 Depends: opensips (= ${binary:Version}),
          opensips-tlsmgm-module (= ${binary:Version}),
+         opensips-tls-openssl-module (= ${binary:Version}) | opensips-tls-wolfssl-module (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Description: WebSocket Secure (WSS) transport module for OpenSIPS
@@ -653,3 +697,31 @@ Description: STIR/SHAKEN support for OpenSIPS
  .
  This module adds support for implementing STIR/SHAKEN (RFC 8224, RFC 8588)
  Authentication and Verification services in OpenSIPS.
+
+Package: opensips-prometheus-module
+Architecture: any
+Multi-Arch: same
+Depends: opensips (= ${binary:Version}),
+         opensips-http-modules (= ${binary:Version}),
+         ${shlibs:Depends}, ${misc:Depends}
+Description: Prometheus Monitoring support for OpenSIPS
+ OpenSIPS is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, OpenSIPS can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This module provides support in OpenSIPS for the Prometheus
+ (https://prometheus.io/) monitoring tool.
+
+Package: opensips-kafka-module
+Architecture: any
+Multi-Arch: same
+Depends: opensips (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Description: Implementation of an Apache Kafka producer
+ OpenSIPS is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, OpenSIPS can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This module is an implementation of an Apache Kafka producer.
+ It serves as a transport backend for the Event Interface and
+ also provides a stand-alone connector to be used from the
+ OpenSIPS script in order to publish messages to Kafka brokers.

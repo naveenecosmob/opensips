@@ -55,7 +55,6 @@
 #include "../../route.h"
 #include "../../action.h"
 #include "../../dset.h"
-#include "../../ipc.h"
 #include "../../data_lump.h"
 
 #include "ut.h"
@@ -76,18 +75,6 @@ int pass_provisional_replies = 0;
 
 /* T holder for the last local transaction */
 struct cell** last_localT;
-
-/* used for passing multiple params across an RPC for running local route */
-struct t_uac_rpc_param {
-	struct cell *new_cell;
-	char *buf;
-	int buf_len;
-	str next_hop;
-	/* this is a mini dlg-struct, carrying only send_sock and next_hop
-	 * as this is what the local route needs */
-	dlg_t dlg;
-};
-
 
 
 /*
@@ -175,9 +162,9 @@ static inline unsigned int dlg2hash( dlg_t* dlg )
 
 
 static int run_local_route( struct cell *new_cell, char **buf, int *buf_len,
-																dlg_t *dialog)
+				dlg_t *dialog, struct sip_msg **ret_req, char **ret_req_buf)
 {
-	struct sip_msg *req;
+	struct sip_msg *req = NULL;
 	struct cell *backup_cell;
 	int backup_route_type;
 	struct retr_buf *request;
@@ -185,11 +172,12 @@ static int run_local_route( struct cell *new_cell, char **buf, int *buf_len,
 	union sockaddr_union new_to_su;
 	struct socket_info *new_send_sock;
 	unsigned short dst_changed;
-	char *buf1;
+	char *buf1=NULL, *sipmsg_buf;
 	int buf_len1, sip_msg_len;
 	str h_to, h_from, h_cseq, h_callid;
 
 	LM_DBG("building sip_msg from buffer\n");
+	sipmsg_buf = *buf; /* remember the buffer used to get the sip_msg */
 	req = buf_to_sip_msg( *buf, *buf_len, dialog);
 	if (req==NULL) {
 		LM_ERR("failed to build sip_msg from buffer\n");
@@ -204,7 +192,7 @@ static int run_local_route( struct cell *new_cell, char **buf, int *buf_len,
 
 	/* run the route */
 	swap_route_type( backup_route_type, LOCAL_ROUTE);
-	run_top_route( sroutes->local.a, req);
+	run_top_route( sroutes->local, req);
 	set_route_type( backup_route_type );
 
 	/* transfer current message context back to t */
@@ -334,7 +322,13 @@ static int run_local_route( struct cell *new_cell, char **buf, int *buf_len,
 			}
 		}
 
-		shm_free(*buf);
+		/* the `buf` buffer is the same as `sipmsg_buf`, so we
+		 * do not loose the original msg buffer; later, if we 
+		 * see a non zero `buf1` (as a marker that we visited this
+		 * part of the code), we know that we have to release the
+		 * `sipmsg_buf` also; if we did not visit this part of the
+		 * code, the `buf` == `sipmsg_buf` and  `buf1` is NULL, so
+		 * nothing to free later */
 		*buf = buf1;
 		*buf_len = buf_len1;
 		/* use new buffer */
@@ -367,112 +361,20 @@ skip_update:
 		free_proxy( new_proxy );
 		pkg_free( new_proxy );
 	}
-	free_sip_msg(req);
-	pkg_free(req);
 
-	return 0;
-}
-
-
-static void rpc_run_local_route(int sender, void *v_param)
-{
-	struct t_uac_rpc_param *param=(struct t_uac_rpc_param *)v_param;
-	struct cell *new_cell = param->new_cell;
-	struct usr_avp **backup;
-	int ret;
-
-	if (sroutes->local.a==NULL) {
-
-		/* nothing to run here */
-		ret = -2;
-
+	if (ret_req) {
+		*ret_req = req;
+		/* if the buffer was rebuilt, return also the original buffer */
+		*ret_req_buf = buf1 ? sipmsg_buf : NULL;
 	} else {
-
-		/* run the local route */
-
-		/* set transaction AVP list */
-		backup = set_avp_list( &new_cell->user_avps);
-
-		ret = run_local_route( new_cell, &param->buf, &param->buf_len,
-			&param->dlg);
-
-		set_avp_list( backup );
-
-	}
-
-	/* setting the len of the resulting buffer is the marker for the calling
-	 * process that we are done
-	 * IMPORTANT: this MUST be the last thing to do here */
-	if (ret==0) {
-		/* success */
-		new_cell->uac[0].request.buffer.s = param->buf;
-		new_cell->uac[0].request.buffer.len = param->buf_len;
-	} else {
-		new_cell->uac[0].request.buffer.s = NULL;
-		new_cell->uac[0].request.buffer.len = -1;
-	}
-
-	/* cleanup */
-	if (param->dlg.hooks.next_hop)
-		shm_free(param->dlg.hooks.next_hop->s);
-	shm_free(param);
-}
-
-
-static inline int rpc_trigger_local_route(struct cell *new_cell,
-											char *buf, int len, dlg_t* dialog)
-{
-	struct t_uac_rpc_param *rpc_p = NULL;
-
-	rpc_p=(struct t_uac_rpc_param*)shm_malloc(sizeof(struct t_uac_rpc_param));
-	if (rpc_p==NULL) {
-		LM_ERR("failed to allocate RPC param in shm, not running local"
-			" route :(\n");
-		return -1;
-	}
-	memset( rpc_p, 0, sizeof(struct t_uac_rpc_param));
-
-	rpc_p->new_cell = new_cell;
-	rpc_p->buf = buf;
-	rpc_p->buf_len = len;
-	rpc_p->dlg.send_sock = dialog->send_sock;
-	if (dialog->hooks.next_hop) {
-		rpc_p->dlg.hooks.next_hop = &rpc_p->next_hop;
-		if (shm_str_dup( &rpc_p->next_hop, dialog->hooks.next_hop)<0) {
-			LM_ERR("failed to duplicate next_hop in shm, not running local"
-				" route :(\n");
-			goto error;
-		}
-	}
-
-	new_cell->uac[0].request.buffer.len=0;
-
-	if ( ipc_dispatch_rpc( rpc_run_local_route, (void*)rpc_p) < 0 ) {
-		LM_ERR("failed to dispatch RPC job, not running local"
-			" route :(\n");
-		shm_free(rpc_p->dlg.hooks.next_hop->s);
-		goto error;
-	}
-
-	/* wait for the job to be executed - doing a busy-waiting is a bit of
-	 * an ugly hack, but harmless - we do block module procs, not workers;
-	 * also this is a temporary solution until next releases, where 
-	 * the module procs will also have reactors ;) */
-	while (new_cell->uac[0].request.buffer.len==0)
-		usleep(10);
-
-	/* if success, the len and buf are valid and transaction updated. */
-	/* if error, the len is -1, buf NULL and the transaction not updated.
-	 *    -> the upper function will set the original buffer */
-	if (new_cell->uac[0].request.buffer.len==-1) {
-		new_cell->uac[0].request.buffer.len = 0;
-		new_cell->uac[0].request.buffer.s = NULL;
+		free_sip_msg(req);
+		pkg_free(req);
+		/* if the buffer was rebuilt, free the original one */
+		if (buf1)
+			shm_free(sipmsg_buf);
 	}
 
 	return 0;
-error:
-	shm_free(rpc_p);
-	return -1;
 }
 
 
@@ -485,6 +387,8 @@ int t_uac(str* method, str* headers, str* body, dlg_t* dialog,
 	union sockaddr_union to_su;
 	struct cell *new_cell;
 	struct retr_buf *request;
+	struct sip_msg *req = NULL;
+	char *buf_req = NULL;
 	struct usr_avp **backup;
 	char *buf;
 	int buf_len;
@@ -526,7 +430,7 @@ int t_uac(str* method, str* headers, str* body, dlg_t* dialog,
 	}
 	if (dialog->send_sock==NULL) {
 		/* get the send socket */
-		dialog->send_sock = get_send_socket( NULL/*msg*/, &to_su, proxy->proto);
+		dialog->send_sock = get_send_socket(NULL/*msg*/, &to_su, proxy->proto);
 		if (!dialog->send_sock) {
 			LM_ERR("no corresponding socket for af %d\n", to_su.s.sa_family);
 			ser_error = E_NO_SOCKET;
@@ -588,6 +492,10 @@ int t_uac(str* method, str* headers, str* body, dlg_t* dialog,
 	/* set transaction AVP list */
 	backup = set_avp_list( &new_cell->user_avps );
 
+	/* run the "transaction created" callback if set */
+	if (dialog->t_created_cb)
+		dialog->t_created_cb( new_cell, dialog->t_created_cb_param);
+
 	/* ***** Create the message buffer ***** */
 	buf = build_uac_req(method, headers, body, dialog, 0, new_cell, &buf_len);
 	if (!buf) {
@@ -596,13 +504,11 @@ int t_uac(str* method, str* headers, str* body, dlg_t* dialog,
 		goto error1;
 	}
 
-	/* run the local route, inline or remote, depending on the process
-	 * we are running in */
+	/* run the local route */
 	if (sroutes==NULL) {
-		/* do IPC to run the local route */
-		rpc_trigger_local_route( new_cell, buf, buf_len, dialog);
+		LM_BUG("running local route/t_uac, but no routes in the process\n");
 	} else if (sroutes->local.a) {
-		run_local_route( new_cell, &buf, &buf_len, dialog);
+		run_local_route( new_cell, &buf, &buf_len, dialog, &req, &buf_req);
 	}
 
 	if (request->buffer.s==NULL) {
@@ -646,6 +552,23 @@ int t_uac(str* method, str* headers, str* body, dlg_t* dialog,
 		t_release_transaction(new_cell);
 	} else {
 		start_retr(request);
+	}
+
+	/* successfully sent out */
+
+	if ( req ) {
+		/* run callbacks 
+		 * NOTE: this callback will be executed ONLY if the local route
+		 * was executed (so we have the msg) */
+		if ( has_tran_tmcbs( new_cell, TMCB_MSG_SENT_OUT) ) {
+			set_extra_tmcb_params( &request->buffer,
+				&request->dst);
+			run_trans_callbacks( TMCB_MSG_SENT_OUT, new_cell,
+				req, 0, 0);
+		}
+		free_sip_msg(req);
+		pkg_free(req);
+		if (buf_req) shm_free(buf_req);
 	}
 
 	set_avp_list( backup );

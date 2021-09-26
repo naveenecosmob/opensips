@@ -243,7 +243,7 @@ build_branch(char *branch, int *size,
 	int reply_matching;
 
 	/* we want all contact pings from a contact in one bucket*/
-	hash_id = core_hash(curi, 0, 0) & (NH_TABLE_ENTRIES-1);
+	hash_id = core_hash(curi, NULL, 0) & (NH_TABLE_ENTRIES-1);
 
 	/* do we need to track and match the replies for this ping?
 	 * We do if latency or remove on timeout flags are set for the contact */
@@ -300,14 +300,19 @@ build_branch(char *branch, int *size,
 	memcpy( branch, BMAGIC, BMAGIC_LEN);
 
 	branch += BMAGIC_LEN;
+	*size -= BMAGIC_LEN;
 
 	if (reply_matching) {
 		ret=int2reverse_hex(&branch, size, hash_id);
 		if (ret < 0)
 			goto out_nospace;
 
+		if (*size <= 0)
+			goto out_nospace;
+
 		*branch = '.';
 		branch++;
+		*size -= 1;
 
 		ret=int64_2reverse_hex(&branch, size, ct_coords);
 		if (ret < 0)
@@ -321,7 +326,11 @@ build_branch(char *branch, int *size,
 	if (dangling_coords)
 		ul.free_ucontact_coords(ct_coords);
 
+	if (*size <= 0)
+		goto out_nospace;
+
 	*branch = '\0';
+	*size -= 1;
 
 	return 0;
 
@@ -343,7 +352,7 @@ build_sipping(udomain_t *d, str *curi, struct socket_info* s,str *path,
 #define s_len(_s) (sizeof(_s)-1)
 	static char buf[MAX_SIPPING_SIZE];
 	char *p, proto_str[PROTO_NAME_MAX_SIZE];
-	str address, port;
+	str *address, *port;
 	str st;
 	int len;
 
@@ -367,29 +376,29 @@ build_sipping(udomain_t *d, str *curi, struct socket_info* s,str *path,
 	st.len = p - proto_str;
 
 	if (s->adv_name_str.len)
-		address = s->adv_name_str;
-	else if (default_global_address.len)
+		address = &s->adv_name_str;
+	else if (default_global_address->len)
 		address = default_global_address;
 	else
-		address = s->address_str;
+		address = &s->address_str;
 	if (s->adv_port_str.len)
-		port = s->adv_port_str;
-	else if (default_global_port.len)
+		port = &s->adv_port_str;
+	else if (default_global_port->len)
 		port = default_global_port;
 	else
-		port = s->port_no_str;
+		port = &s->port_no_str;
 
 	/* quick proto uppercase */
 	*((int *)st.s) &= ~((1 << 21) | (1 << 13) | (1 << 5));
 
 	if ( sipping_method.len + 1 + curi->len + s_len(" SIP/2.0"CRLF) +
-		s_len("Via: SIP/2.0/") + st.len + address.len +
-		1 + port.len + strlen(branch) +
+		s_len("Via: SIP/2.0/") + st.len + address->len +
+		1 + port->len + strlen(branch) +
 		(path->len ? (s_len(CRLF"Route: ") + path->len) : 0) +
 		s_len(CRLF"From: ") +  sipping_from.len + s_len(";tag=") + 8 +
 		s_len(CRLF"To: ") + curi->len +
 		s_len(CRLF"Call-ID: ") + sipping_callid.len + 1 + 8 + 1 + 8 + 1 +
-		address.len +
+		address->len +
 		s_len(CRLF"CSeq: 1 ") + sipping_method.len +
 		s_len(CRLF"Max-Forwards: "MAX_FORWARD) +
 		s_len(CRLF"Content-Length: 0" CRLF CRLF)
@@ -405,9 +414,9 @@ build_sipping(udomain_t *d, str *curi, struct socket_info* s,str *path,
 	append_str( p, *curi);
 	append_fix( p, " SIP/2.0"CRLF"Via: SIP/2.0/");
 	append_str( p, st);
-	append_str( p, address);
+	append_str( p, *address);
 	*(p++) = ':';
-	append_str( p, port);
+	append_str( p, *port);
 	append_str( p, sbranch);
 	if (path->len) {
 		append_fix( p, CRLF"Route: ");
@@ -429,7 +438,7 @@ build_sipping(udomain_t *d, str *curi, struct socket_info* s,str *path,
 	len = 8;
 	int2reverse_hex( &p, &len, get_ticks() );
 	*(p++) = '@';
-	append_str( p, address);
+	append_str( p, *address);
 	append_fix( p, CRLF"CSeq: 1 ");
 	append_str( p, sipping_method);
 	append_fix( p, CRLF"Max-Forwards: "MAX_FORWARD);

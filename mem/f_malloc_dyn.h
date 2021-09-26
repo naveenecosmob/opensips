@@ -118,12 +118,13 @@ void *fm_malloc(struct fm_block *fm, unsigned long size,
 	/* not found, bad! */
 
 #if defined(DBG_MALLOC) || defined(STATISTICS)
-	LM_ERR(oom_errorf, fm->name, fm->size - fm->real_used, size,
-			fm->name[0] == 'p' ? "M" : "m");
-	LM_INFO("attempting defragmentation...\n");
+	LM_WARN("not enough contiguous free %s memory (%ld bytes left, need %lu), attempting " \
+			"defragmentation... please increase the \"-%s\" command line parameter!\n",
+			fm->name, fm->size - fm->real_used, size, fm->name[0] == 'p' ? "M" : "m");
 #else
-	LM_ERR(oom_nostats_errorf, fm->name, size, fm->name[0] == 'p' ? "M" : "m");
-	LM_INFO("attempting defragmentation...\n");
+	LM_WARN("not enough contiguous free %s memory (need %lu), attempting defragmentation... " \
+			"please increase the \"-%s\" command line parameter!\n",
+			fm->name, fm->size - fm->real_used, size, fm->name[0] == 'p' ? "M" : "m");
 #endif
 
 	for( frag = fm->first_frag; (char*)frag < (char*)fm->last_frag;  )
@@ -161,7 +162,12 @@ void *fm_malloc(struct fm_block *fm, unsigned long size,
 		frag = n;
 	}
 
-	LM_INFO("unable to alloc a big enough fragment!\n");
+#if defined(DBG_MALLOC) || defined(STATISTICS)
+	LM_ERR(oom_errorf, fm->name, fm->size - fm->real_used, size,
+			fm->name[0] == 'p' ? "M" : "m");
+#else
+	LM_ERR(oom_nostats_errorf, fm->name, size, fm->name[0] == 'p' ? "M" : "m");
+#endif
 	pkg_threshold_check();
 	return 0;
 
@@ -235,16 +241,9 @@ void fm_free(struct fm_block *fm, void *p, const char *file,
 	        f->file, f->func, f->line);
 #endif
 
-join:
-
-	if( fm->large_limit < fm->large_space )
-		goto no_join;
-
+	/* attempt to join with a next fragment that also happens to be free */
 	n = FRAG_NEXT(f);
-
-	if (((char*)n < (char*)fm->last_frag) &&  frag_is_free(n) )
-	{
-
+	if (((char*)n < (char*)fm->last_frag) &&  frag_is_free(n)) {
 		fm_remove_free(fm, n);
 		/* join */
 		f->size += n->size + FRAG_OVERHEAD;
@@ -253,11 +252,7 @@ join:
 		//fm->real_used -= FRAG_OVERHEAD;
 		fm->used += FRAG_OVERHEAD;
 		#endif
-
-		goto join;
 	}
-
-no_join:
 
 #ifdef DBG_MALLOC
 	f->file = file;
@@ -499,7 +494,6 @@ void fm_status(struct fm_block *fm)
 
 	}
 	LM_GEN1(memdump, "TOTAL: %6d free fragments = %6lu free bytes\n", i, size);
-	LM_GEN1(memdump, "TOTAL: %ld large bytes\n", fm->large_space );
 	LM_GEN1(memdump, "TOTAL: %u overhead\n", (unsigned int)FRAG_OVERHEAD );
 	LM_GEN1(memdump, "-----------------------------\n");
 }

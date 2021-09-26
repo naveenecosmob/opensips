@@ -79,28 +79,17 @@ int tcp_init_listener(struct socket_info *si);
 /* helper function to set all TCP related options to a socket */
 int tcp_init_sock_opt(int s);
 
-/* blocking connect on a non-blocking socket */
-int tcp_connect_blocking(int s, const struct sockaddr *servaddr,
-		socklen_t addrlen);
-
-/* blocking connect on a non-blocking socket with timeout */
-int tcp_connect_blocking_timeout(int s, const struct sockaddr *servaddr,
-		socklen_t addrlen, int timeout);
-
 /********************** TCP conn management functions ************************/
 
 /* returns the connection identified by either the id or the destination to */
-int tcp_conn_get(int id, struct ip_addr* ip, int port, enum sip_protos proto,
-		void *proto_extra_id, struct tcp_connection** conn, int* conn_fd);
-
-/* creates a new tcp conn around a newly connected socket
- * and sends it to the master */
-struct tcp_connection* tcp_conn_create(int sock, union sockaddr_union* su,
-		struct socket_info* si, int state);
+int tcp_conn_get(int unsigned id, struct ip_addr* ip, int port,
+		enum sip_protos proto, void *proto_extra_id,
+		struct tcp_connection** conn, int* conn_fd,
+		struct socket_info* send_sock);
 
 /* creates a new tcp conn around a newly connected socket */
-struct tcp_connection* tcp_conn_new(int sock, union sockaddr_union* su,
-		struct socket_info* si, int state);
+struct tcp_connection* tcp_conn_create(int sock, union sockaddr_union* su,
+		struct socket_info* si, int state, int send2main);
 
 /* sends a connected connection to the master */
 int tcp_conn_send(struct tcp_connection *con);
@@ -115,8 +104,8 @@ void tcp_conn_destroy(struct tcp_connection* tcpconn);
 int tcp_conn_fcntl(struct receive_info *rcv, int attr, void *value);
 
 /* returns the correlation ID of a TCP connection */
-int tcp_get_correlation_id( int id, unsigned long long *cid);
+int tcp_get_correlation_id( unsigned int id, unsigned long long *cid);
 
-extern int last_outgoing_tcp_id;
+extern unsigned int last_outgoing_tcp_id;
 
 #endif /* _NET_TCP_H_ */

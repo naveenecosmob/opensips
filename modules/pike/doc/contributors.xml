@@ -44,19 +44,19 @@
 	</row>
 	<row>
 		<entry>4. </entry>
+		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
+		<entry align="center">12</entry>
+		<entry align="center">9</entry>
+		<entry align="center">29</entry>
+		<entry align="center">67</entry>
+	</row>
+	<row>
+		<entry>5. </entry>
 		<entry>Daniel-Constantin Mierla (<ulink url="https://github.com/miconda">@miconda</ulink>)</entry>
 		<entry align="center">11</entry>
 		<entry align="center">9</entry>
 		<entry align="center">24</entry>
 		<entry align="center">20</entry>
-	</row>
-	<row>
-		<entry>5. </entry>
-		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">11</entry>
-		<entry align="center">8</entry>
-		<entry align="center">28</entry>
-		<entry align="center">66</entry>
 	</row>
 	<row>
 		<entry>6. </entry>
@@ -101,7 +101,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Elena-Ramona Modroiu, Ancuta Onofrei, Konstantin Bokarius, Julián Moreno Patiño, Jesus Rodrigues, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Elena-Ramona Modroiu, Ancuta Onofrei, Konstantin Bokarius, Julián Moreno Patiño, Jesus Rodrigues, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert.</para>
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -128,28 +128,28 @@
 	<tbody>
 	<row>
 		<entry>1. </entry>
+		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
+		<entry align="center">Mar 2014 - Nov 2020</entry>
+	</row>
+	<row>
+		<entry>2. </entry>
 		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
 		<entry align="center">May 2011 - Sep 2019</entry>
 	</row>
 	<row>
-		<entry>2. </entry>
+		<entry>3. </entry>
 		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
 		<entry align="center">Jun 2002 - Apr 2019</entry>
 	</row>
 	<row>
-		<entry>3. </entry>
+		<entry>4. </entry>
 		<entry>Vlad Patrascu (<ulink url="https://github.com/rvlad-patrascu">@rvlad-patrascu</ulink>)</entry>
 		<entry align="center">May 2017 - Apr 2019</entry>
 	</row>
 	<row>
-		<entry>4. </entry>
+		<entry>5. </entry>
 		<entry>Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>)</entry>
 		<entry align="center">Jun 2018 - Jun 2018</entry>
-	</row>
-	<row>
-		<entry>5. </entry>
-		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">Mar 2014 - Jun 2018</entry>
 	</row>
 	<row>
 		<entry>6. </entry>
@@ -179,7 +179,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Edson Gellert Schubert, Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Jesus Rodrigues, Ancuta Onofrei, Elena-Ramona Modroiu, Andrei Pelinescu-Onciul, Jan Janak (<ulink url="https://github.com/janakj">@janakj</ulink>), Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>).</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Edson Gellert Schubert, Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Jesus Rodrigues, Ancuta Onofrei, Elena-Ramona Modroiu, Andrei Pelinescu-Onciul, Jan Janak (<ulink url="https://github.com/janakj">@janakj</ulink>), Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>).</para>
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

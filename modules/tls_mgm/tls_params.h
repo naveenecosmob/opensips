@@ -75,6 +75,7 @@ int tlsp_set_dhparams(modparam_t type, void *val);
 
 int tlsp_set_eccurve(modparam_t type, void *val);
 
+<<<<<<< HEAD
 enum tls_method get_ssl_min_method(void);
 
 enum tls_method get_ssl_max_method(void);
@@ -84,5 +85,7 @@ int parse_ssl_method(str *name);
 int tls_get_method(str *method_str,
 	enum tls_method *method, enum tls_method *method_max);
 
+=======
+>>>>>>> 33097b43f45a9cd6046b385829e5a4efb002014f
 #endif
 

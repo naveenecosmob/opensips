@@ -83,7 +83,7 @@ extern rw_lock_t *frd_data_lock;
 /* List of data kept in dr's attr and freed here - pkg */
 
 typedef struct _free_list_t{
-	tmrec_p trec;
+	tmrec_expr_t *trec;
 	frd_thresholds_t *thr;
 	unsigned int n;
 	struct _free_list_t *next;
@@ -225,25 +225,27 @@ parse_error:
 }
 
 static int create_time_rec(const str *time_start, const str *time_end,
-		const str *week_days, tmrec_p trec, tmrec_p *out_rec)
+		const str *week_days, tmrec_expr_t *trx, tmrec_expr_t **out_rec)
 {
 	int end_h, end_m;
-
-	memset(trec, 0, sizeof(tmrec_t));
+	tmrec_p trec = &trx->tr;
 
 	/* the default, "catch-all" time rec - using NULL is optimal */
-	if (str_match(time_start, _str("00:00")) &&
-	        str_match(time_end, _str("23:59")) &&
-	        str_match(week_days, _str("Mon-Sun"))) {
+	if (str_match(time_start, const_str("00:00")) &&
+	        str_match(time_end, const_str("23:59")) &&
+	        str_match(week_days, const_str("Mon-Sun"))) {
 		*out_rec = NULL;
 		return 0;
 	} else {
-		*out_rec = trec;
+		*out_rec = trx;
 	}
 
 	if (strtime(time_start, &trec->ts.tm_hour, &trec->ts.tm_min) != 0
 			|| strtime(time_end, &end_h, &end_m) != 0)
 		return -1;
+
+	memset(trx, 0, sizeof *trx);
+	trx->is_leaf = 1;
 
 	trec->duration = (end_h * 3600 + end_m * 60) -
 		(trec->ts.tm_hour * 3600 + trec->ts.tm_min * 60);
@@ -345,7 +347,7 @@ static int frd_load_data(dr_head_p drp, free_list_t **fl)
 		}
 		fl_it ->next = *fl;
 		*fl = fl_it;
-		fl_it->trec = shm_malloc(sizeof(tmrec_t) * row_count);
+		fl_it->trec = shm_malloc(sizeof *fl_it->trec * row_count);
 		if (fl_it->trec == NULL)
 			goto no_more_shm;
 		fl_it->thr = shm_malloc(sizeof(frd_thresholds_t) * row_count);
@@ -354,10 +356,10 @@ static int frd_load_data(dr_head_p drp, free_list_t **fl)
 		fl_it->n = row_count;
 
 		for (i = 0; i < row_count; ++i) {
-			tmrec_p trec;
+			tmrec_expr_t *trec;
 
 			values = ROW_VALUES(rows + i);
-			fl_it->trec[i].byday = NULL;
+			fl_it->trec[i].tr.byday = NULL;
 
 			/* rule id */
 			if (VAL_NULL(values)) {
@@ -437,8 +439,8 @@ static void frd_destroy_data_unsafe(dr_head_p dr_head, free_list_t *fl)
 
 	while (it) {
 		for (i = 0; i < it->n; ++i)
-			if (it->trec[i].byday)
-				tr_byxxx_free(it->trec[i].byday);
+			if (it->trec[i].tr.byday)
+				tr_byxxx_free(it->trec[i].tr.byday);
 		shm_free(it->trec);
 		shm_free(it->thr);
 		aux = it;

@@ -87,7 +87,7 @@ struct tcp_worker *tcp_workers=0;
 
 /* unique for each connection, used for
  * quickly finding the corresponding connection for a reply */
-static int* connection_id=0;
+static unsigned int* connection_id=0;
 
 /* array of TCP partitions */
 static struct tcp_partition tcp_parts[TCP_PARTITION_SIZE];
@@ -147,7 +147,7 @@ int is_tcp_main = 0;
 
 /* the ID of the TCP conn used for the last send operation in the
  * current process - attention, this is a really ugly HACK here */
-int last_outgoing_tcp_id = 0;
+unsigned int last_outgoing_tcp_id = 0;
 
 static struct scaling_profile *s_profile = NULL;
 
@@ -169,7 +169,7 @@ static inline int init_sock_keepalive(int s)
 				strerror(errno));
 			return -1;
 		}
-		LM_INFO("TCP keepalive enabled on socket %d\n",s);
+		LM_DBG("TCP keepalive enabled on socket %d\n",s);
 	}
 #endif
 #ifdef HAVE_TCP_KEEPINTVL
@@ -243,124 +243,6 @@ int tcp_init_sock_opt(int s)
 error:
 	return -1;
 }
-
-
-/*! \brief blocking connect on a non-blocking fd; it will timeout after
- * tcp_connect_timeout
- * if BLOCKING_USE_SELECT and HAVE_SELECT are defined it will internally
- * use select() instead of poll (bad if fd > FD_SET_SIZE, poll is preferred)
- */
-int tcp_connect_blocking_timeout(int fd, const struct sockaddr *servaddr,
-											socklen_t addrlen, int timeout)
-{
-	int n;
-#if defined(HAVE_SELECT) && defined(BLOCKING_USE_SELECT)
-	fd_set sel_set;
-	fd_set orig_set;
-	struct timeval timeout;
-#else
-	struct pollfd pf;
-#endif
-	int elapsed;
-	int to;
-	int err;
-	struct timeval begin;
-	unsigned int err_len;
-	int poll_err;
-	char *ip;
-	unsigned short port;
-
-	poll_err=0;
-	to = timeout*1000;
-
-	if (gettimeofday(&(begin), NULL)) {
-		LM_ERR("Failed to get TCP connect start time\n");
-		goto error;
-	}
-
-again:
-	n=connect(fd, servaddr, addrlen);
-	if (n==-1){
-		if (errno==EINTR){
-			elapsed=get_time_diff(&begin);
-			if (elapsed<to) goto again;
-			else goto error_timeout;
-		}
-		if (errno!=EINPROGRESS && errno!=EALREADY){
-			get_su_info( servaddr, ip, port);
-			LM_ERR("[server=%s:%d] (%d) %s\n",ip, port, errno, strerror(errno));
-			goto error;
-		}
-	}else goto end;
-
-	/* poll/select loop */
-#if defined(HAVE_SELECT) && defined(BLOCKING_USE_SELECT)
-		FD_ZERO(&orig_set);
-		FD_SET(fd, &orig_set);
-#else
-		pf.fd=fd;
-		pf.events=POLLOUT;
-#endif
-	while(1){
-		elapsed = get_time_diff(&begin);
-		if (elapsed<to)
-			to-=elapsed;
-		else
-			goto error_timeout;
-#if defined(HAVE_SELECT) && defined(BLOCKING_USE_SELECT)
-		sel_set=orig_set;
-		timeout.tv_sec = to/1000000;
-		timeout.tv_usec = to%1000000;
-		n=select(fd+1, 0, &sel_set, 0, &timeout);
-#else
-		n=poll(&pf, 1, to/1000);
-#endif
-		if (n<0){
-			if (errno==EINTR) continue;
-			get_su_info( servaddr, ip, port);
-			LM_ERR("poll/select failed:[server=%s:%d] (%d) %s\n",
-				ip, port, errno, strerror(errno));
-			goto error;
-		}else if (n==0) /* timeout */ continue;
-#if defined(HAVE_SELECT) && defined(BLOCKING_USE_SELECT)
-		if (FD_ISSET(fd, &sel_set))
-#else
-		if (pf.revents&(POLLERR|POLLHUP|POLLNVAL)){
-			LM_ERR("poll error: flags %d - %d %d %d %d \n", pf.revents,
-				   POLLOUT,POLLERR,POLLHUP,POLLNVAL);
-			poll_err=1;
-		}
-#endif
-		{
-			err_len=sizeof(err);
-			getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len);
-			if ((err==0) && (poll_err==0)) goto end;
-			if (err!=EINPROGRESS && err!=EALREADY){
-				get_su_info( servaddr, ip, port);
-				LM_ERR("failed to retrieve SO_ERROR [server=%s:%d] (%d) %s\n",
-					ip, port, err, strerror(err));
-				goto error;
-			}
-		}
-	}
-error_timeout:
-	/* timeout */
-	LM_ERR("connect timed out, %d us elapsed out of %d us\n", elapsed,
-		timeout*1000);
-error:
-	return -1;
-end:
-	return 0;
-}
-
-int tcp_connect_blocking(int fd, const struct sockaddr *servaddr,
-															socklen_t addrlen)
-{
-	return tcp_connect_blocking_timeout(fd, servaddr, addrlen,
-			tcp_connect_timeout);
-}
-
-
 
 static int send2worker(struct tcp_connection* tcpconn,int rw)
 {
@@ -506,7 +388,7 @@ error:
 /*! \brief finds a connection, if id=0 return NULL
  * \note WARNING: unprotected (locks) use tcpconn_get unless you really
  * know what you are doing */
-static struct tcp_connection* _tcpconn_find(int id)
+static struct tcp_connection* _tcpconn_find(unsigned int id)
 {
 	struct tcp_connection *c;
 	unsigned hash;
@@ -515,7 +397,7 @@ static struct tcp_connection* _tcpconn_find(int id)
 		hash=tcp_id_hash(id);
 		for (c=TCP_PART(id).tcpconn_id_hash[hash]; c; c=c->id_next){
 #ifdef EXTRA_DEBUG
-			LM_DBG("c=%p, c->id=%d, port=%d\n",c, c->id, c->rcv.src_port);
+			LM_DBG("c=%p, c->id=%u, port=%d\n",c, c->id, c->rcv.src_port);
 			print_ip("ip=", &c->rcv.src_ip, "\n");
 #endif
 			if ((id==c->id)&&(c->state!=S_CONN_BAD)) return c;
@@ -526,7 +408,7 @@ static struct tcp_connection* _tcpconn_find(int id)
 
 
 /* returns the correlation ID of a TCP connection */
-int tcp_get_correlation_id( int id, unsigned long long *cid)
+int tcp_get_correlation_id( unsigned int id, unsigned long long *cid)
 {
 	struct tcp_connection* c;
 
@@ -543,15 +425,17 @@ int tcp_get_correlation_id( int id, unsigned long long *cid)
 
 
 /*! \brief _tcpconn_find with locks and acquire fd */
-int tcp_conn_get(int id, struct ip_addr* ip, int port, enum sip_protos proto,
-			void *proto_extra_id, struct tcp_connection** conn, int* conn_fd)
+int tcp_conn_get(unsigned int id, struct ip_addr* ip, int port,
+		enum sip_protos proto, void *proto_extra_id,
+		struct tcp_connection** conn, int* conn_fd,
+		struct socket_info* send_sock)
 {
 	struct tcp_connection* c;
 	struct tcp_connection* tmp;
 	struct tcp_conn_alias* a;
 	unsigned hash;
 	long response[2];
-	int part;
+	unsigned int part;
 	int n;
 	int fd;
 
@@ -565,7 +449,7 @@ int tcp_conn_get(int id, struct ip_addr* ip, int port, enum sip_protos proto,
 
 	/* continue search based on IP address + port + transport */
 #ifdef EXTRA_DEBUG
-	LM_DBG("%d  port %d\n",id, port);
+	LM_DBG("%d  port %u\n",id, port);
 	if (ip) print_ip("tcpconn_find: ip ", ip, "\n");
 #endif
 	if (ip){
@@ -574,13 +458,19 @@ int tcp_conn_get(int id, struct ip_addr* ip, int port, enum sip_protos proto,
 			TCPCONN_LOCK(part);
 			for (a=TCP_PART(part).tcpconn_aliases_hash[hash]; a; a=a->next) {
 #ifdef EXTRA_DEBUG
-				LM_DBG("a=%p, c=%p, c->id=%d, alias port= %d port=%d\n",
+				LM_DBG("a=%p, c=%p, c->id=%u, alias port= %d port=%d\n",
 					a, a->parent, a->parent->id, a->port,
 					a->parent->rcv.src_port);
 				print_ip("ip=",&a->parent->rcv.src_ip,"\n");
+				if (send_sock && a->parent->rcv.bind_address) {
+					print_ip("requested send_sock ip=", &send_sock->address,"\n");
+					print_ip("found send_sock ip=", &a->parent->rcv.bind_address->address,"\n");
+				}
 #endif
 				c = a->parent;
 				if (c->state != S_CONN_BAD &&
+				    c->flags&F_CONN_INIT &&
+				    (send_sock==NULL || send_sock == a->parent->rcv.bind_address) &&
 				    port == a->port &&
 				    proto == c->type &&
 				    ip_addr_cmp(ip, &c->rcv.src_ip) &&
@@ -613,8 +503,10 @@ found:
 	}
 
 	if (c->proc_id == process_no) {
-		LM_DBG("tcp connection found (%p) already in this process ( %d ) , fd = %d\n", c, c->proc_id, c->fd);
-		/* we already have the connection in this worker's reactor, no need to acquire FD */
+		LM_DBG("tcp connection found (%p) already in this process ( %d ) ,"
+			" fd = %d\n", c, c->proc_id, c->fd);
+		/* we already have the connection in this worker's reactor, */
+		/* no need to acquire FD */
 		*conn = c;
 		*conn_fd = c->fd;
 		return 1;
@@ -643,8 +535,8 @@ found:
 	}
 	if (c!=tmp){
 		LM_CRIT("got different connection:"
-			"  %p (id= %d, refcnt=%d state=%d != "
-			"  %p (id= %d, refcnt=%d state=%d (n=%d)\n",
+			"  %p (id= %u, refcnt=%d state=%d != "
+			"  %p (id= %u, refcnt=%d state=%d (n=%d)\n",
 			  c,   c->id,   c->refcnt,   c->state,
 			  tmp, tmp->id, tmp->refcnt, tmp->state, n
 		   );
@@ -680,7 +572,7 @@ int tcp_conn_fcntl(struct receive_info *rcv, int attr, void *value)
 		TCPCONN_LOCK(rcv->proto_reserved1);
 		con =_tcpconn_find(rcv->proto_reserved1);
 		if (!con) {
-			LM_ERR("Strange, tcp conn not found (id=%d)\n",
+			LM_ERR("Strange, tcp conn not found (id=%u)\n",
 				rcv->proto_reserved1);
 		} else {
 			tcp_conn_set_lifetime( con, (int)(long)(value));
@@ -737,6 +629,13 @@ static void _tcpconn_rm(struct tcp_connection* c)
 			&c->con_aliases[r], next, prev);
 	lock_destroy(&c->write_lock);
 
+	if (c->async) {
+		for (r = 0; r<c->async->pending; r++)
+			shm_free(c->async->chunks[r]);
+		shm_free(c->async);
+		c->async = NULL;
+	}
+
 	if (protos[c->type].net.conn_clean)
 		protos[c->type].net.conn_clean(c);
 
@@ -776,7 +675,7 @@ static void tcpconn_rm(struct tcp_connection* c)
 
 /*! \brief add port as an alias for the "id" connection
  * \return 0 on success,-1 on failure */
-int tcpconn_add_alias(int id, int port, int proto)
+int tcpconn_add_alias(unsigned int id, int port, int proto)
 {
 	struct tcp_connection* c;
 	unsigned hash;
@@ -813,21 +712,21 @@ ok:
 	TCPCONN_UNLOCK(id);
 #ifdef EXTRA_DEBUG
 	if (a) LM_DBG("alias already present\n");
-	else   LM_DBG("alias port %d for hash %d, id %d\n", port, hash, id);
+	else   LM_DBG("alias port %d for hash %d, id %u\n", port, hash, id);
 #endif
 	return 0;
 error_aliases:
 	TCPCONN_UNLOCK(id);
-	LM_ERR("too many aliases for connection %p (%d)\n", c, id);
+	LM_ERR("too many aliases for connection %p (%u)\n", c, id);
 	return -1;
 error_not_found:
 	TCPCONN_UNLOCK(id);
-	LM_ERR("no connection found for id %d\n",id);
+	LM_ERR("no connection found for id %u\n",id);
 	return -1;
 error_sec:
 	LM_WARN("possible port hijack attempt\n");
 	LM_WARN("alias already present and points to another connection "
-			"(%d : %d and %d : %d)\n", a->parent->id,  port, id, port);
+			"(%d : %d and %u : %d)\n", a->parent->id,  port, id, port);
 	TCPCONN_UNLOCK(id);
 	return -1;
 }
@@ -903,6 +802,18 @@ static struct tcp_connection* tcpconn_new(int sock, union sockaddr_union* su,
 	c->hist = sh_push(c, con_hist);
 #endif
 
+	if (protos[si->proto].net.async_chunks) {
+		c->async = shm_malloc(sizeof(struct tcp_async_data) +
+				protos[si->proto].net.async_chunks *
+				sizeof(struct tcp_async_chunk));
+		if (c->async) {
+			c->async->allocated = protos[si->proto].net.async_chunks;
+			c->async->oldest = 0;
+			c->async->pending = 0;
+		} else
+			LM_WARN("could not allocate async data for con!\n");
+	}
+
 	tcp_connections_no++;
 	return c;
 
@@ -914,26 +825,14 @@ error0:
 }
 
 
-/* creates a new tcp connection structure and informs the TCP Main on that
+/* creates a new tcp connection structure
+ * if send2main is 1, the function informs the TCP Main about the new conn
  * a +1 ref is set for the new conn !
  * IMPORTANT - the function assumes you want to create a new TCP conn as
  * a result of a connect operation - the conn will be set as connect !!
  * Accepted connection are triggered internally only */
 struct tcp_connection* tcp_conn_create(int sock, union sockaddr_union* su,
-											struct socket_info* si, int state)
-{
-	struct tcp_connection *c;
-
-	/* create the connection structure */
-	c = tcp_conn_new(sock, su, si, state);
-	if (c==NULL)
-		return NULL;
-
-	return (tcp_conn_send(c) == 0 ? c : NULL);
-}
-
-struct tcp_connection* tcp_conn_new(int sock, union sockaddr_union* su,
-		struct socket_info* si, int state)
+		struct socket_info* si, int state, int send2main)
 {
 	struct tcp_connection *c;
 
@@ -943,9 +842,6 @@ struct tcp_connection* tcp_conn_new(int sock, union sockaddr_union* su,
 		LM_ERR("tcpconn_new failed\n");
 		return NULL;
 	}
-	c->refcnt++; /* safe to do it w/o locking, it's not yet
-					available to the rest of the world */
-	sh_log(c->hist, TCP_REF, "connect, (%d)", c->refcnt);
 
 	if (protos[c->type].net.conn_init &&
 			protos[c->type].net.conn_init(c) < 0) {
@@ -956,9 +852,14 @@ struct tcp_connection* tcp_conn_new(int sock, union sockaddr_union* su,
 	}
 	c->flags |= F_CONN_INIT;
 
-	return c;
-}
+	c->refcnt++; /* safe to do it w/o locking, it's not yet
+					available to the rest of the world */
+	sh_log(c->hist, TCP_REF, "connect, (%d)", c->refcnt);
+	if (!send2main)
+		return c;
 
+	return (tcp_conn_send(c) == 0 ? c : NULL);
+}
 
 /* sends a new connection from a worker to main */
 int tcp_conn_send(struct tcp_connection *c)
@@ -1001,7 +902,7 @@ error:
 static inline void tcpconn_destroy(struct tcp_connection* tcpconn)
 {
 	int fd;
-	int id = tcpconn->id;
+	int unsigned id = tcpconn->id;
 
 	TCPCONN_LOCK(id); /*avoid races w/ tcp_send*/
 	tcpconn->refcnt--;
@@ -1053,7 +954,7 @@ static inline int handle_new_connect(struct socket_info* si)
 	struct tcp_connection* tcpconn;
 	socklen_t su_len = sizeof(su);
 	int new_sock;
-	int id;
+	unsigned int id;
 
 	/* coverity[overrun-buffer-arg: FALSE] - union has 28 bytes, CID #200070 */
 	new_sock=accept(si->socket, &(su.s), &su_len);
@@ -1124,7 +1025,7 @@ inline static int handle_tcpconn_ev(struct tcp_connection* tcpconn, int fd_i,
 {
 	int fd;
 	int err;
-	int id;
+	unsigned int id;
 	unsigned int err_len;
 
 	if (event_type == IO_WATCH_READ) {
@@ -1616,6 +1517,7 @@ static inline void __tcpconn_lifetime(int force)
 							c->flags|=F_CONN_REMOVED;
 						}
 						close(fd);
+						c->s = -1;
 					}
 					_tcpconn_rm(c);
 					tcp_connections_no--;
@@ -1764,12 +1666,14 @@ int tcp_init(void)
 	}
 	memset( tcp_workers, 0, tcp_workers_max_no*sizeof(struct tcp_worker));
 	/* init globals */
-	connection_id=(int*)shm_malloc(sizeof(int));
+	connection_id=(unsigned int*)shm_malloc(sizeof(unsigned int));
 	if (connection_id==0){
 		LM_CRIT("could not alloc globals in shm memory\n");
 		goto error;
 	}
-	*connection_id=rand();
+	// The  rand()  function returns a pseudo-random integer in the range 0 to
+	// RAND_MAX inclusive (i.e., the mathematical range [0, RAND_MAX]).
+	*connection_id=(unsigned int)rand();
 	memset( &tcp_parts, 0, TCP_PARTITION_SIZE*sizeof(struct tcp_partition));
 	/* init partitions */
 	for( i=0 ; i<TCP_PARTITION_SIZE ; i++ ) {
@@ -2234,6 +2138,3 @@ error:
 	free_mi_response(resp);
 	return 0;
 }
-
-
-

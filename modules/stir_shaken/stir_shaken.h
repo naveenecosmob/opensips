@@ -72,14 +72,20 @@
 #define HDR_PPT_PARAM_S "ppt=\"shaken\""
 #define HDR_PPT_PARAM_LEN (sizeof(HDR_PPT_PARAM_S)-1)
 
-#define USE_IDENTITY_CODE 428
-#define USE_IDENTITY_REASON "Use Identity Header"
+#define BADREQ_CODE 400
+#define BADREQ_ORIG_REASON "Bad Request (PAI/From Number)"
+#define BADREQ_DEST_REASON "Bad Request (To Number)"
+#define BADREQ_NODATE_REASON "Bad Request (Missing Date)"
 #define STALE_DATE_CODE 403
 #define STALE_DATE_REASON "Stale Date"
-#define INVALID_IDENTITY_CODE 438
-#define INVALID_IDENTITY_REASON "Invalid Identity Header"
+#define USE_IDENTITY_CODE 428
+#define USE_IDENTITY_REASON "Use Identity Header"
 #define UNSUPPORTED_CRED_CODE 437
 #define UNSUPPORTED_CRED_REASON "Unsupported Credential"
+#define INVALID_IDENTITY_CODE 438
+#define INVALID_IDENTITY_REASON "Invalid Identity Header"
+#define IERROR_CODE 500
+#define IERROR_REASON "Internal Server Error"
 
 #define TN_AUTH_LIST_OID "1.3.6.1.5.5.7.1.26"
 #define TN_AUTH_LIST_LN "TNAuthorizationList"

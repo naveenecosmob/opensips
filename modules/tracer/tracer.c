@@ -26,6 +26,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/uio.h>
 #include "../../net/net_tcp.h"
 #include "../../sr_module.h"
 #include "../../dprint.h"
@@ -44,11 +47,15 @@
 #include "../../script_cb.h"
 #include "../tm/tm_load.h"
 #include "../dialog/dlg_load.h"
+#include "../b2b_logic/b2b_load.h"
 #include "../../mod_fix.h"
 #include "tracer.h"
 
 /* trace info context position */
 int sl_ctx_idx=-1;
+static int trace_file_mode = 0600;
+static int trace_default_syslog_level = 0;
+static int trace_default_syslog_facility = -1;
 
 /* DB structures used for all queries */
 db_key_t db_keys[NR_KEYS];
@@ -75,6 +82,7 @@ static db_ps_t siptrace_ps = NULL;
 
 struct tm_binds tmb;
 struct dlg_binds dlgb;
+b2bl_api_t b2bl;
 
 static trace_proto_t tprot;
 
@@ -126,22 +134,29 @@ static int corr_id=-1;
  * **/
 static int fixup_tid(void **param);
 static int fixup_sflags(void **param);
+static int fixup_cflags(void **param);
 static int trace_w(struct sip_msg *msg, tlist_elem_p list,
-					void *scope_p, str *trace_types_s, str *trace_attrs);
-static int sip_trace(struct sip_msg*, trace_info_p);
-static int sip_trace_instance(struct sip_msg*, trace_instance_p, int);
+		void *scope_p, str *trace_types_s, str *trace_attrs,
+		str* c_flags, str *corr_id);
+static int sip_trace(struct sip_msg*, trace_info_p, int);
+static int sip_trace_instance(struct sip_msg*, trace_instance_p, int, int);
 
+static struct b2b_tracer* b2b_set_tracer_cb(void);
+static int trace_b2b(struct sip_msg*, trace_info_p);
 static int trace_dialog(struct sip_msg*, trace_info_p);
 static int trace_transaction(struct sip_msg* msg, trace_info_p info,
-								char dlg_tran);
+		char dlg_tran, int reverte_dir);
 
 
-static void trace_onreq_out(struct cell* t, int type, struct tmcb_params *ps);
+static void trace_onreq_out(struct cell* t, int type, struct tmcb_params *ps,
+		int leg_flag);
 static void trace_tm_in(struct cell* t, int type, struct tmcb_params *ps);
+static void trace_tm_in_rev(struct cell* t, int type, struct tmcb_params *ps);
 static void trace_tm_out(struct cell* t, int type, struct tmcb_params *ps);
+static void trace_tm_out_rev(struct cell* t, int type, struct tmcb_params *ps);
 static void trace_msg_out(struct sip_msg* req, str  *buffer,
-			struct socket_info* send_sock, int proto, union sockaddr_union *to,
-			trace_info_p info);
+		struct socket_info* send_sock, int proto, union sockaddr_union *to,
+		trace_info_p info, int leg_flag);
 static void siptrace_dlg_cancel(struct cell* t, int type, struct tmcb_params *param);
 
 /*
@@ -183,6 +198,7 @@ static int pipport2su (str *sproto, str *ip, unsigned short port,
 			union sockaddr_union *tmp_su, unsigned int *proto);
 
 static int parse_trace_id(unsigned int type, void *val);
+static int parse_trace_syslog_level(unsigned int type, void *val);
 
 void free_trace_info_pkg(void *param);
 void free_trace_info_shm(void *param);
@@ -202,7 +218,10 @@ static cmd_export_t cmds[] = {
 		{CMD_PARAM_STR, fixup_tid, 0},
 		{CMD_PARAM_STR|CMD_PARAM_OPT, fixup_sflags, 0},
 		{CMD_PARAM_STR|CMD_PARAM_OPT, 0, 0},
-		{CMD_PARAM_STR|CMD_PARAM_OPT, 0, 0}, {0,0,0}},
+		{CMD_PARAM_STR|CMD_PARAM_OPT, 0, 0},
+		{CMD_PARAM_STR|CMD_PARAM_OPT, fixup_cflags, 0},
+		{CMD_PARAM_STR|CMD_PARAM_OPT, 0, 0},
+		{0,0,0}},
 		REQUEST_ROUTE|FAILURE_ROUTE|ONREPLY_ROUTE|BRANCH_ROUTE|LOCAL_ROUTE},
 	{0,0,{{0,0,0}},0}
 };
@@ -228,6 +247,10 @@ static param_export_t params[] = {
 	{"direction_column",   STR_PARAM, &direction_column.s   },
 	{"trace_on",           INT_PARAM, &trace_on             },
 	{"trace_local_ip",     STR_PARAM, &trace_local_ip.s     },
+	{"file_mode",          INT_PARAM, &trace_file_mode      },
+	{"syslog_default_level",    INT_PARAM,&trace_default_syslog_level},
+	{"syslog_default_facility", STR_PARAM|USE_FUNC_PARAM,
+		parse_trace_syslog_level},
 	{0, 0, 0}
 };
 
@@ -463,6 +486,15 @@ static void get_siptrace_type(str *name, str *trace_uri, str *param1,
 				&& (__url__->s[0]|0x20) == 's' && (__url__->s[1]|0x20) == 'i' \
 					&& (__url__->s[2]|0x20) == 'p'))
 
+	#define IS_FILE_URI(__url__) ((__url__->len > 4 \
+				&& (__url__->s[0]|0x20) == 'f' && (__url__->s[1]|0x20) == 'i' \
+				&& (__url__->s[2]|0x20) == 'l' && (__url__->s[3]|0x20) == 'e'))
+
+	#define IS_SYSLOG_URI(__url__) ((__url__->len >= 6 \
+				&& (__url__->s[0]|0x20) == 's' && (__url__->s[1]|0x20) == 'y' \
+				&& (__url__->s[2]|0x20) == 's'  && (__url__->s[3]|0x20) == 'l'\
+				&& (__url__->s[4]|0x20) == 'o' && (__url__->s[5]|0x20) == 'g'))
+
 	#define IS_UDP(__url__) ((__url__.len == 3/*O_o*/ \
 				&& (__url__.s[0]|0x20) == 'u' && (__url__.s[1]|0x20) == 'd' \
 					&& (__url__.s[2]|0x20) == 'p'))
@@ -482,6 +514,14 @@ static void get_siptrace_type(str *name, str *trace_uri, str *param1,
 		trace_uri->s += HEP_PREFIX_LEN;
 	} else if (IS_SIP_URI(trace_uri)) {
 		*type = TYPE_SIP;
+	} else if (IS_FILE_URI(trace_uri)) {
+		*type = TYPE_FILE;
+		trace_uri->len -= 5;
+		trace_uri->s += 5;
+	} else if (IS_SYSLOG_URI(trace_uri)) {
+		*type = TYPE_SYSLOG;
+		trace_uri->len -= 6;
+		trace_uri->s += 6;
 	} else {
 		/* need to take the table into account */
 		if (param1 && (param1->s == NULL || param1->len == 0))
@@ -495,6 +535,8 @@ static void get_siptrace_type(str *name, str *trace_uri, str *param1,
 
 	#undef IS_HEP_URI
 	#undef IS_SIP_URI
+	#undef IS_FILE_URI
+	#undef IS_SYSLOG_URI
 	#undef IS_TCP
 	#undef IS_UDP
 }
@@ -522,6 +564,48 @@ static inline tlist_elem_p get_dyn_siptrace_id(str *name, unsigned int hash, enu
 	if (!leave_locked)
 		lock_release(dyn_trace_lock);
 	return el;
+}
+
+static int parse_siptrace_syslog(str *orig_uri, st_syslog_struct_t *s)
+{
+	char *p;
+	int ret = -1;
+	str tmp;
+	str uri;
+
+	if (!orig_uri || orig_uri->len <= 0) {
+		s->facility = trace_default_syslog_facility;
+		s->level = trace_default_syslog_level;
+		return 0;
+	}
+
+	if (pkg_nt_str_dup(&uri, orig_uri) < 0) {
+		LM_ERR("cannot duplicate string in pkg!\n");
+		return -1;
+	}
+
+	p = q_memchr(uri.s, ':', uri.len);
+	if (p) {
+		tmp.s = p + 1;
+		tmp.len = uri.len - (tmp.s - uri.s);
+		if (str2sint(&tmp, &s->level) < 0) {
+			LM_ERR("invalid syslog level [%.*s], using default %d\n",
+					tmp.len, tmp.s, trace_default_syslog_level);
+			s->level = trace_default_syslog_level;
+		}
+		*p = '\0';
+	} else {
+		s->level = trace_default_syslog_level;
+	}
+	s->facility = str2facility(uri.s);
+	if (s->facility < 0) {
+		LM_ERR("invalid syslog facility [%.*s]!\n", uri.len, uri.s);
+		goto end;
+	}
+	ret = 0;
+end:
+	pkg_free(uri.s);
+	return ret;
 }
 
 static int parse_siptrace_id(str *suri)
@@ -553,7 +637,6 @@ static int parse_siptrace_id(str *suri)
 	str param1={NULL, 0};
 	tlist_elem_p elem;
 	enum types uri_type;
-
 
 	if (suri == NULL) {
 		LM_ERR("bad input parameters!\n");
@@ -612,6 +695,11 @@ static int parse_siptrace_id(str *suri)
 			LM_ERR("failed to parse the URI!\n");
 			return -1;
 		}
+	} else if (uri_type == TYPE_FILE) {
+		elem->el.file.path = trace_uri.s;
+	} else if (uri_type == TYPE_SYSLOG) {
+		if (parse_siptrace_syslog(&trace_uri, &elem->el.syslog) < 0)
+			return -1;
 	} else {
 		elem->el.hep.name = trace_uri;
 	}
@@ -810,6 +898,11 @@ static int mod_init(void)
 	if (trace_local_ip.s)
 		parse_trace_local_ip();
 
+	if (trace_default_syslog_facility < 0)
+		trace_default_syslog_facility = log_facility;
+	if (trace_default_syslog_level != 0)
+		trace_default_syslog_level = *log_level;
+
 	LM_INFO("initializing...\n");
 
 	trace_on_flag = (int*)shm_malloc(sizeof(int));
@@ -872,6 +965,17 @@ static int mod_init(void)
 
 				break;
 
+			case TYPE_FILE:
+				/* open the file in main, and it will get inherited
+				 * in each process */
+				it->el.file.fd = open(it->el.file.path,
+						O_RDWR|O_APPEND|O_CREAT, trace_file_mode);
+				if (it->el.file.fd < 0) {
+					LM_ERR("could not open file <%s> for tracing\n", it->el.file.path);
+					return -1;
+				}
+				break;
+			case TYPE_SYSLOG:
 			case TYPE_SIP:
 			case TYPE_END:
 
@@ -931,6 +1035,12 @@ static int mod_init(void)
 	/* load the module dependencies, best effort for now, as the strict
 	 * dependency will be checked later in fixup function, according to
 	 * the sip_trace() flags */
+	if(load_b2b_logic_api(&b2bl)< 0) {
+		LM_DBG("Failed to load b2b_logic API (module not loaded)\n");
+	} else {
+		b2bl.register_set_tracer_cb( b2b_set_tracer_cb, FL_USE_SIPTRACE);
+	}
+
 	if (load_dlg_api(&dlgb) != 0)
 		LM_DBG("failed to load the dialog API (dialog module not loaded?)\n");
 
@@ -1032,10 +1142,11 @@ static inline int insert_siptrace(st_db_struct_t *st_db,
 		db_vals[13].val.str_val.len = 0;
 	}
 
-	CON_PS_REFERENCE(st_db->con) = &siptrace_ps;
-	if (con_set_inslist(&st_db->funcs,st_db->con,
-						&st_db->ins_list,keys,NR_KEYS) < 0 )
+	if (con_set_inslist(&st_db->funcs, st_db->con,
+			&st_db->ins_list, keys, NR_KEYS) < 0) {
 		CON_RESET_INSLIST(st_db->con);
+	}
+	CON_SET_CURR_PS(st_db->con, &siptrace_ps);
 	if(st_db->funcs.insert(st_db->con, keys, vals, NR_KEYS) < 0) {
 		LM_ERR("error storing trace\n");
 		return -1;
@@ -1045,6 +1156,80 @@ static inline int insert_siptrace(st_db_struct_t *st_db,
 	return 0;
 }
 
+static inline int trace_write_file(int fd, char *path,
+		db_key_t *keys, db_val_t *vals, str *trace_attrs)
+{
+	int ret = -1;
+	struct tm t;
+	int close_fd = 0;
+	char time_buf[32];
+	struct iovec v[] = {
+		/* 0 */{ (void *)db_vals[11].val.string_val, 0}, /* in/out */
+		/* 1 */{ " ", 1 },
+		/* 2 */{ db_vals[4].val.str_val.s, db_vals[4].val.str_val.len}, /* proto */
+		/* 3 */{ "", 0 }, /* time */
+		/* 4 */{ db_vals[5].val.str_val.s, db_vals[5].val.str_val.len}, /* from IP */
+		/* 5 */{ ":", 1 },
+		/* 6 */{ "", 0 }, /* from port */
+		/* 7 */{ " -> ", 4 },
+		/* 8 */{ db_vals[8].val.str_val.s, db_vals[8].val.str_val.len}, /* to IP */
+		/* 9 */{ ":", 1 },
+		/* 10 */{ "", 0 }, /* to port */
+		/* 11 */{ "\n", 1 },
+		/* 12 */{ db_vals[0].val.str_val.s, db_vals[0].val.str_val.len},
+		/* 13 */{ "\n\n", 2 },
+	};
+
+	localtime_r(&db_vals[10].val.time_val, &t);
+	strftime(time_buf, sizeof(time_buf), " %F %T ", &t);
+
+	v[0].iov_len = strlen(v[0].iov_base);
+	v[3].iov_base = time_buf;
+	v[3].iov_len = strlen(v[3].iov_base);
+	v[6].iov_base = int2str(db_vals[6].val.int_val, (int *)&v[6].iov_len);
+	v[11].iov_base = int2str(db_vals[9].val.int_val, (int *)&v[10].iov_len);
+
+	if (fd < 0) {
+		fd = open(path, O_RDWR|O_APPEND|O_CREAT, trace_file_mode);
+		if (fd < 0) {
+			LM_ERR("could not open write file %s (%s)\n",
+					path, strerror(errno));
+			return -1;
+		}
+		close_fd = 1;
+	}
+
+	if (writev(fd, v, sizeof(v)/sizeof(v[0])) < 0)
+		LM_ERR("could not open write in file file %s (%s)\n",
+				path, strerror(errno));
+	else
+		ret = 0;
+
+	if (close_fd)
+		close(fd);
+	return ret;
+}
+
+static inline int trace_write_syslog(st_syslog_struct_t *s,
+		db_key_t *keys, db_val_t *vals, str *trace_attrs)
+{
+	LM_GEN2(s->facility, s->level, "%s %.*s %.*s:%d -> %.*s:%d\n%.*s\n",
+			db_vals[11].val.string_val, /* in/out */
+			db_vals[4].val.str_val.len, db_vals[4].val.str_val.s, /* proto */
+			db_vals[5].val.str_val.len, db_vals[5].val.str_val.s, /* from IP */
+			db_vals[6].val.int_val, /* from port */
+			db_vals[8].val.str_val.len, db_vals[8].val.str_val.s, /* to IP */
+			db_vals[9].val.int_val, /* to port */
+			db_vals[0].val.str_val.len, db_vals[0].val.str_val.s /* body */
+		   );
+
+	return 0;
+}
+
+
+#define trace_check_legs(_instance, _leg_flag) \
+	( (((_instance)->control_flags)&(TRACE_C_CALLER|TRACE_C_CALLEE))==0 \
+	|| ((_instance)->control_flags&_leg_flag)!=0 )
 
 static int save_siptrace(struct sip_msg *msg, db_key_t *keys, db_val_t *vals,
 				trace_instance_p info, int conn_id)
@@ -1085,7 +1270,7 @@ static int save_siptrace(struct sip_msg *msg, db_key_t *keys, db_val_t *vals,
 		case TYPE_SIP:
 			if (trace_send_duplicate(db_vals[0].val.str_val.s,
 					db_vals[0].val.str_val.len, &it->el.uri) < 0) {
-				LM_ERR("Faield to duplicate with sip to <%.*s:%.*s>\n",
+				LM_ERR("Failed to duplicate with sip to <%.*s:%.*s>\n",
 						it->el.uri.host.len, it->el.uri.host.s,
 						it->el.uri.port.len, it->el.uri.port.s);
 				continue;
@@ -1096,11 +1281,26 @@ static int save_siptrace(struct sip_msg *msg, db_key_t *keys, db_val_t *vals,
 			it->el.db->funcs.use_table(it->el.db->con,
 										&it->el.db->table);
 
-			if (insert_siptrace(it->el.db, keys, vals, info->trace_attrs) < 0) {
-				LM_ERR("failed to insert in DB!\n");
-				return -1;
+			if (insert_siptrace(it->el.db, keys, vals, &info->trace_attrs)<0) {
+				LM_ERR("Failed to insert in DB!\n");
+				continue;
 			}
 
+			break;
+		case TYPE_FILE:
+			if (trace_write_file(it->el.file.fd, it->el.file.path,
+					keys, vals, &info->trace_attrs) < 0) {
+				LM_ERR("Failed to write in %s file\n", it->el.file.path);
+				continue;
+			}
+			break;
+
+		case TYPE_SYSLOG:
+			if (trace_write_syslog(&it->el.syslog, keys, vals,
+					&info->trace_attrs) < 0) {
+				LM_ERR("Failed to write to syslog\n");
+				continue;
+			}
 			break;
 		default:
 			LM_ERR("invalid type!\n");
@@ -1115,16 +1315,20 @@ static void trace_transaction_dlgcb(struct dlg_cell* dlg, int type,
 		struct dlg_cb_params * params)
 {
 	trace_info_p info = (trace_info_p)*params->param;
+	int reverte_dir = 0;
 
 	TRACE_FLAG_UNSET(info, TRACE_INFO_TRAN);
 
-	if (trace_transaction(params->msg, info, 1)<0) {
+	if (dlgb.get_direction()==DLG_DIR_UPSTREAM)
+		reverte_dir = 1;
+
+	if (trace_transaction(params->msg, info, 1, reverte_dir)<0) {
 		LM_ERR("trace transaction failed!\n");
 		return;
 	}
 
 	info->conn_id = params->msg->rcv.proto_reserved1;
-	sip_trace(params->msg, info);
+	sip_trace(params->msg, info, reverte_dir?TRACE_C_CALLEE:TRACE_C_CALLER);
 }
 
 void free_trace_info_pkg(void *param)
@@ -1155,8 +1359,77 @@ void free_trace_info_shm(void *param)
 	shm_free(param);
 }
 
+
+static int trace_b2b_transaction(struct sip_msg* msg, void *trans, void* param)
+{
+	trace_info_p info = (trace_info_p)param;
+	struct cell *t = (struct cell*)trans;
+
+	/* context for the request message */
+	SET_TRACER_CONTEXT( info );
+
+	if (t==NULL) {
+		/* the only situation when we do not have a transaction, is for
+		 * UAS/inbound ACK request, so trace it as a standalone msg */
+		sip_trace_instance( msg, info->instances, info->conn_id, 0);
+		return 0;
+	}
+
+	/* for UAS transactions, do direct trace of the incoming request */
+	if ( (t && (t->flags&T_IS_LOCAL_FLAG)==0) )
+		sip_trace_instance( msg, info->instances, info->conn_id, 0);
+
+	/* arm transaction callbacks for futher tracing*/
+
+	if(tmb.register_tmcb( NULL, t, TMCB_MSG_MATCHED_IN,
+	trace_tm_in, info, 0) <=0) {
+		LM_ERR("can't register TM MATCH IN callback\n");
+		return -1;
+	}
+
+	if(tmb.register_tmcb( NULL, t, TMCB_MSG_SENT_OUT,
+	trace_tm_out, info, 0) <=0) {
+		LM_ERR("can't register TM SEND OUT callback\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+
+static struct b2b_tracer* b2b_set_tracer_cb(void)
+{
+	static struct b2b_tracer tracer;
+
+	/* as parameter, set the tracing info from the current contect */
+	tracer.param = (void*)GET_TRACER_CONTEXT;
+
+	if (tracer.param==NULL) {
+		tracer.f = NULL;
+		tracer.f_freep = NULL;
+	} else {
+		tracer.f = trace_b2b_transaction;
+		tracer.f_freep = free_trace_info_shm;
+	}
+
+	return &tracer;
+}
+
+
+static int trace_b2b(struct sip_msg *msg, trace_info_p info)
+{
+	/* mark the initial request with the tracing flag, so the 
+	 * B2B logic, via the "creating new session" callback, will 
+	 * install the tracing callback into the B2B logic
+	 */
+	msg->msg_flags |= FL_USE_SIPTRACE;
+
+	return 0;
+}
+
+
 static int trace_transaction(struct sip_msg* msg, trace_info_p info,
-								char dlg_tran)
+								char dlg_tran, int reverse_dir)
 {
 	if (msg==NULL)
 		return 0;
@@ -1164,7 +1437,10 @@ static int trace_transaction(struct sip_msg* msg, trace_info_p info,
 	/* context for the request message */
 	SET_TRACER_CONTEXT(info);
 
-	if (TRACE_FLAG_ISSET(info, TRACE_INFO_TRAN)) {
+	/* CANCEL forms a separate transaction, so it ok to install the
+	 * callback again. */
+	if (msg->REQ_METHOD!=METHOD_CANCEL &&
+	TRACE_FLAG_ISSET(info, TRACE_INFO_TRAN)) {
 		LM_DBG("transaction callbacks already registered!\n");
 		return 0;
 	}
@@ -1173,13 +1449,15 @@ static int trace_transaction(struct sip_msg* msg, trace_info_p info,
 	 * and stateless replies */
 	msg->msg_flags |= FL_USE_SIPTRACE;
 
-	if(tmb.register_tmcb( msg, 0, TMCB_MSG_MATCHED_IN, trace_tm_in, info, 0) <=0) {
+	if(tmb.register_tmcb( msg, 0, TMCB_MSG_MATCHED_IN,
+	reverse_dir?trace_tm_in_rev:trace_tm_in, info, 0) <=0) {
 		LM_ERR("can't register TM MATCH IN callback\n");
 		return -1;
 	}
 
-	if(tmb.register_tmcb( msg, 0, TMCB_MSG_SENT_OUT, trace_tm_out,
-			info, dlg_tran?0:free_trace_info_shm) <=0) {
+	if(tmb.register_tmcb( msg, 0, TMCB_MSG_SENT_OUT,
+	reverse_dir?trace_tm_out_rev:trace_tm_out, info,
+	dlg_tran?0:free_trace_info_shm) <=0) {
 		LM_ERR("can't register TM SEND OUT callback\n");
 		return -1;
 	}
@@ -1199,12 +1477,12 @@ static int trace_dialog(struct sip_msg *msg, trace_info_p info)
 	}
 
 	if (!dlgb.create_dlg || ! dlgb.get_dlg) {
-		LM_ERR("Can't trace dialog!Api not loaded!\n");
+		LM_ERR("Can't trace dialog! Api not loaded!\n");
 		return -1;
 	}
 
 	if (dlgb.create_dlg(msg, 0)<1) {
-		LM_ERR("faield to create dialog!\n");
+		LM_ERR("failed to create dialog!\n");
 		return -1;
 	}
 
@@ -1231,7 +1509,7 @@ static int trace_dialog(struct sip_msg *msg, trace_info_p info)
 	}
 
 	/* also trace this transaction */
-	if (trace_transaction(msg, info, 1) < 0) {
+	if (trace_transaction(msg, info, 1, 0/*initial request*/) < 0) {
 		LM_ERR("failed to trace initial INVITE transaction!\n");
 		return -1;
 	}
@@ -1257,7 +1535,7 @@ static void siptrace_dlg_cancel(struct cell* t, int type, struct tmcb_params *pa
 
 	LM_DBG("Tracing incoming cancel due to trace_dialog() \n");
 
-	if (trace_transaction(req, *param->param, 1) < 0) {
+	if (trace_transaction(req, *param->param, 1, 0 /*initial request*/) < 0) {
 		LM_ERR("trace transaction failed!\n");
 		return;
 	}
@@ -1270,7 +1548,7 @@ static void siptrace_dlg_cancel(struct cell* t, int type, struct tmcb_params *pa
 	}
 
 	/* trace current request */
-	sip_trace(req, &info);
+	sip_trace(req, &info, TRACE_C_CALLER);
 }
 
 
@@ -1302,6 +1580,10 @@ static int st_parse_flags(str *sflags)
 			case 'd':
 			case 'D':
 				flags = TRACE_DIALOG;
+				break;
+			case 'b':
+			case 'B':
+				flags = TRACE_B2B;
 				break;
 			case ' ':
 				continue;
@@ -1401,13 +1683,20 @@ static int fixup_sflags(void **param)
 		return -1;
 	}
 
+	if (_flags==TRACE_B2B) {
+		if (b2bl.register_set_tracer_cb==NULL) {
+			LM_ERR("B2B tracing explicitly required, but"
+				"b2b_entities module not loaded\n");
+			return -1;
+		}
+	} else
 	if (_flags==TRACE_DIALOG) {
 		if (dlgb.create_dlg==NULL) {
 			LM_ERR("Dialog tracing explicitly required, but"
 				"dialog module not loaded\n");
 			return -1;
 		}
-	}else
+	} else
 	if (_flags==TRACE_TRANSACTION) {
 		if (tmb.t_gett==NULL) {
 			LM_INFO("Will do stateless transaction aware tracing!\n");
@@ -1420,6 +1709,32 @@ static int fixup_sflags(void **param)
 
 	return 0;
 }
+
+
+static int fixup_cflags(void **param)
+{
+	str *s_flags;
+	int i;
+	int flags = 0;
+
+	s_flags = (str*)*param;
+	for( i=0 ; i<s_flags->len ; i++ ) {
+		switch (s_flags->s[i]) {
+		case 'C':
+			flags |= TRACE_C_CALLER; break;
+		case 'c':
+			flags |= TRACE_C_CALLEE; break;
+		default:
+			LM_WARN("unsupported tracing control flag [%c], ignoring\n",
+				s_flags->s[i]);
+		}
+	}
+
+	*param = (void *)((unsigned long)flags);
+
+	return 0;
+}
+
 
 int trace_has_totag(struct sip_msg* _m)
 {
@@ -1443,7 +1758,8 @@ int trace_has_totag(struct sip_msg* _m)
 }
 
 static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
-		int trace_types, int trace_flags, str *trace_attrs)
+					int trace_types, int trace_flags, str *trace_attrs,
+					int control_flags, str *corr_id)
 {
 	int extra_len=0;
 	trace_info_p info=NULL;
@@ -1452,7 +1768,10 @@ static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
 	trace_instance_p instance=NULL;
 
 	if (trace_attrs != NULL)
-		extra_len = sizeof(str) + trace_attrs->len;
+		extra_len += trace_attrs->len;
+
+	if (corr_id != NULL)
+		extra_len += corr_id->len;
 
 	if (trace_flags == TRACE_MESSAGE) {
 		/* we don't need to allocate this structure since it will only be
@@ -1460,31 +1779,39 @@ static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
 		instance = &stack_instance;
 
 		memset(instance, 0, sizeof(trace_instance_t));
-		if (extra_len) {
-			instance->trace_attrs = trace_attrs;
-		}
+		if (trace_attrs) instance->trace_attrs = *trace_attrs;
+		if (corr_id) instance->forced_correlation_id = *corr_id;
+
 	} else if (!current_processing_ctx) {
 		LM_BUG("sip_trace() failed due to NULL context");
 		return -1;
 
-	/* for stateful transactions or dialogs
+	/* for stateful transactions / dialogs / B2B
 	 * we need the structure in the shared memory */
-	} else if(trace_flags == TRACE_DIALOG ||
+	} else if(trace_flags == TRACE_DIALOG || trace_flags == TRACE_B2B ||
 	(trace_flags == TRACE_TRANSACTION && tmb.t_gett)) {
 		instance=shm_malloc(sizeof(trace_instance_t) + extra_len);
 		if (instance==NULL) {
-			LM_ERR("no more shm!\n");
+			LM_ERR("no more shm for a new tracing context!\n");
 			return -1;
 		}
 
 		memset(instance, 0, sizeof(*instance) + extra_len);
 
 		if (extra_len) {
-			instance->trace_attrs = (str*)(instance+1);
-			instance->trace_attrs->s = (char*)(instance->trace_attrs+1);
-
-			memcpy(instance->trace_attrs->s, trace_attrs->s, trace_attrs->len);
-			instance->trace_attrs->len = trace_attrs->len;
+			if (trace_attrs) {
+				instance->trace_attrs.s = (char*)(instance+1);
+				instance->trace_attrs.len = trace_attrs->len;
+				memcpy( instance->trace_attrs.s, trace_attrs->s,
+					trace_attrs->len);
+			}
+			if (corr_id) {
+				instance->forced_correlation_id.s =  ((char*)(instance+1)) +
+					instance->trace_attrs.len;
+				instance->forced_correlation_id.len = corr_id->len;
+				memcpy(instance->forced_correlation_id.s, corr_id->s,
+					corr_id->len);
+			}
 		}
 	} else if (trace_flags == TRACE_TRANSACTION && tmb.t_gett==NULL) {
 		/* we need this structure in pkg for stateless replies
@@ -1496,13 +1823,14 @@ static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
 		}
 
 		memset(instance, 0, sizeof(trace_instance_t));
-		if (extra_len)
-			instance->trace_attrs = trace_attrs;
+		if (trace_attrs) instance->trace_attrs = *trace_attrs;
+		if (corr_id) instance->forced_correlation_id = *corr_id;
 	} else {
 		LM_ERR("Unknown trace flags %x\n", trace_flags);
 		return -2;
 	}
 
+	instance->control_flags = control_flags;
 	instance->trace_list=el;
 	instance->trace_types = trace_types;
 
@@ -1540,30 +1868,42 @@ static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
 		info->instances = instance;
 	}
 
-	if (trace_flags==TRACE_DIALOG) {
+	if (trace_flags==TRACE_B2B) {
+		if (trace_b2b(msg, info) < 0) {
+			LM_ERR("trace b2b failed!\n");
+			return -1;
+		}
+	} else if (trace_flags==TRACE_DIALOG) {
 		if (trace_dialog(msg, info) < 0) {
 			LM_ERR("trace dialog failed!\n");
 			return -1;
 		}
 	} else if (trace_flags==TRACE_TRANSACTION) {
-		if (trace_transaction(msg, info, 0) < 0) {
+		if (trace_transaction(msg, info, 0, 0 /*initial request*/) < 0) {
 			LM_ERR("trace transaction failed!\n");
 			return -1;
 		}
 	}
 
 
-	/* we're safe; nobody will be in conflict with this conn id since evrybody else
-	 * will have a local copy of this structure */
+	/* we're safe; nobody will be in conflict with this conn id
+	 * since everybody else will have a local copy of this structure */
 	if ( msg->rcv.proto != PROTO_UDP ) {
 		info->conn_id = msg->rcv.proto_reserved1;
 	} else {
 		info->conn_id = 0;
 	}
 
-	if (sip_trace_instance(msg, instance, info->conn_id) < 0) {
-		LM_ERR("sip trace failed!\n");
-		return -1;
+	/* trace the current message only if:
+	 *  (a) per-message tracing was requests
+	 *  or
+	 *  (b) we are not in LOCAL route (UAC trans do not have IN msg) */
+	if (trace_flags!=TRACE_B2B &&
+	(trace_flags == TRACE_MESSAGE || route_type != LOCAL_ROUTE)) {
+		if (sip_trace_instance(msg, instance, info->conn_id,TRACE_C_CALLER)<0){
+			LM_ERR("sip trace failed!\n");
+			return -1;
+		}
 	}
 
 #ifdef STATISTICS
@@ -1579,17 +1919,18 @@ static int sip_trace_handle(struct sip_msg *msg, tlist_elem_p el,
 
 /* tracer wrapper that verifies if the trace is on */
 static int trace_w(struct sip_msg *msg, tlist_elem_p list,
-					void *scope_p, str *trace_types_s, str *trace_attrs)
+					void *scope_p, str *trace_types_s, str *trace_attrs,
+					str *c_flags, str *corr_id)
 {
 
 	int trace_flags;
+	int control_flags;
 	int trace_types=0;
 
-	if(msg==NULL)
-	{
-		LM_DBG("no uas request, local transaction\n");
-		return -1;
-	}
+	if (c_flags)
+		control_flags =  (int)((unsigned long)c_flags);
+	else
+		control_flags = 0;
 
 	if (scope_p != NULL) {
 		trace_flags = (int)((unsigned long)scope_p);
@@ -1605,7 +1946,11 @@ static int trace_w(struct sip_msg *msg, tlist_elem_p list,
 		}
 	}
 
-	if (trace_flags == TRACE_DIALOG &&
+	if (trace_flags == TRACE_B2B && msg->first_line.type == SIP_REQUEST &&
+			b2bl.register_set_tracer_cb != NULL &&
+			msg->REQ_METHOD == METHOD_INVITE && !trace_has_totag(msg)) {
+		LM_DBG("tracing b2b!\n");
+	} else if (trace_flags == TRACE_DIALOG &&
 			dlgb.get_dlg && msg->first_line.type == SIP_REQUEST &&
 			msg->REQ_METHOD == METHOD_INVITE && !trace_has_totag(msg)) {
 		LM_DBG("tracing dialog!\n");
@@ -1615,8 +1960,7 @@ static int trace_w(struct sip_msg *msg, tlist_elem_p list,
 	}
 
 	if (trace_flags == TRACE_TRANSACTION &&
-		msg->first_line.type == SIP_REQUEST &&
-		(msg->REQ_METHOD != METHOD_ACK)) {
+	msg->first_line.type == SIP_REQUEST) {
 		LM_DBG("tracing transaction!\n");
 	} else if (trace_flags == TRACE_TRANSACTION) {
 		LM_DBG("can't trace transaction! Will trace only this message!\n");
@@ -1636,7 +1980,8 @@ static int trace_w(struct sip_msg *msg, tlist_elem_p list,
 		 * else the function will be useless */
 		trace_types = sip_trace_id;
 	}
-	return sip_trace_handle(msg, list, trace_types, trace_flags, trace_attrs);
+	return sip_trace_handle(msg, list, trace_types, trace_flags,
+		trace_attrs, control_flags, corr_id);
 }
 
 #define set_sock_columns( _col_proto, _col_ip, _col_port, _buff, _ip, _port, _proto) \
@@ -1668,7 +2013,7 @@ do { \
 
 
 
-static int sip_trace(struct sip_msg *msg, trace_info_p info)
+static int sip_trace(struct sip_msg *msg, trace_info_p info, int leg_flag)
 {
 	static char toip_buff[IP_ADDR_MAX_STR_SIZE+6];
 	static char fromip_buff[IP_ADDR_MAX_STR_SIZE+6];
@@ -1731,9 +2076,11 @@ static int sip_trace(struct sip_msg *msg, trace_info_p info)
 	db_vals[12].val.str_val.len = get_from(msg)->tag_value.len;
 
 	for (instance = info->instances; instance; instance = instance->next) {
-		if (save_siptrace(msg, db_keys,db_vals, instance, info->conn_id) < 0) {
-			LM_ERR("failed to save tracer\n");
-			goto error;
+		if ( trace_check_legs( instance, leg_flag)) {
+			if (save_siptrace(msg, db_keys,db_vals, instance,info->conn_id)<0){
+				LM_ERR("failed to save tracer\n");
+				goto error;
+			}
 		}
 	}
 
@@ -1750,10 +2097,14 @@ error:
 }
 
 static int sip_trace_instance(struct sip_msg* msg,
-		trace_instance_p instance, int conn_id)
+					trace_instance_p instance, int conn_id, int leg_flag)
 {
 	static char toip_buff[IP_ADDR_MAX_STR_SIZE+6];
 	static char fromip_buff[IP_ADDR_MAX_STR_SIZE+6];
+
+	/* tracing CALLER or CALLE? */
+	if ( !trace_check_legs( instance, leg_flag))
+		return 1;
 
 	if(parse_from_header(msg)==-1 || msg->from==NULL || get_from(msg)==NULL)
 	{
@@ -1821,7 +2172,8 @@ error:
 	return -1;
 }
 
-static void trace_onreq_out(struct cell* t, int type, struct tmcb_params *ps)
+static void trace_onreq_out(struct cell* t, int type, struct tmcb_params *ps,
+																int leg_flag)
 {
 	trace_info_t info;
 	struct dest_info* dest;
@@ -1856,11 +2208,12 @@ static void trace_onreq_out(struct cell* t, int type, struct tmcb_params *ps)
 			dest->send_sock,
 			dest->proto,
 			&dest->to,
-			&info);
+			&info,
+			leg_flag);
 	} else {
 		info.conn_id = 0;
 		trace_msg_out( ps->req, (str*)ps->extra1,
-			NULL, PROTO_NONE, NULL, &info);
+			NULL, PROTO_NONE, NULL, &info, leg_flag);
 	}
 
 }
@@ -1872,7 +2225,10 @@ static void trace_slreq_out(struct sip_msg* req, str *buffer,int rpl_code,
 
 	info = GET_TRACER_CONTEXT;
 
-	trace_msg_out(req, buffer, sock, proto, to, info);
+	/* as this is a stateless callback, we have no idea about the direction
+	 * caller versus callee (if an in-dialog request) so let's assume
+	 * callee, higher chances */
+	trace_msg_out(req, buffer, sock, proto, to, info, TRACE_C_CALLEE);
 }
 
 static void trace_slreply_out(struct sip_msg* req, str *buffer,int rpl_code,
@@ -1930,8 +2286,7 @@ static void trace_slreply_out(struct sip_msg* req, str *buffer,int rpl_code,
 	}
 
 	char * str_code = int2str(rpl_code, &len);
-	statusbuf[INT2STR_MAX_LEN-1]=0;
-	strncpy(statusbuf, str_code, len >= INT2STR_MAX_LEN ? INT2STR_MAX_LEN-1 : len);
+	memcpy(statusbuf, str_code, len + 1 /* NULL terminated */);
 	db_vals[3].val.str_val.s = statusbuf;
 	db_vals[3].val.str_val.len = len;
 	memset(&to_ip, 0, sizeof(struct ip_addr));
@@ -1977,7 +2332,7 @@ static void trace_slack_in(struct sip_msg* req, str *buffer,int rpl_code,
 
 static void trace_msg_out(struct sip_msg* msg, str  *sbuf,
 		struct socket_info* send_sock, int proto, union sockaddr_union *to,
-		trace_info_p info)
+		trace_info_p info, int leg_flag)
 {
 	static char fromip_buff[IP_ADDR_MAX_STR_SIZE+12];
 	static char toip_buff[IP_ADDR_MAX_STR_SIZE+12];
@@ -2058,7 +2413,7 @@ static void trace_msg_out(struct sip_msg* msg, str  *sbuf,
 		su2ip_addr(&to_ip, to);
 		set_sock_columns( db_vals[7], db_vals[8], db_vals[9], toip_buff,
 			&to_ip,
-			(unsigned long)(send_sock->last_remote_real_port?
+			(unsigned long)(send_sock && send_sock->last_remote_real_port?
 				send_sock->last_remote_real_port:su_getport(to)),
 			proto);
 	}
@@ -2071,9 +2426,11 @@ static void trace_msg_out(struct sip_msg* msg, str  *sbuf,
 	db_vals[12].val.str_val.len = get_from(msg)->tag_value.len;
 
 	for (instance = info->instances; instance; instance = instance->next) {
-		if (save_siptrace(msg, db_keys,db_vals, instance, info->conn_id) < 0) {
-			LM_ERR("failed to save siptrace\n");
-			goto error;
+		if ( trace_check_legs( instance, leg_flag)) {
+			if (save_siptrace(msg, db_keys,db_vals, instance,info->conn_id)<0){
+				LM_ERR("failed to save siptrace\n");
+				goto error;
+			}
 		}
 	}
 
@@ -2086,7 +2443,8 @@ error:
 }
 
 
-static void trace_onreply_in(struct cell* t, int type, struct tmcb_params *ps)
+static void trace_onreply_in(struct cell* t, int type, struct tmcb_params *ps,
+												int leg_flag)
 {
 	static char fromip_buff[IP_ADDR_MAX_STR_SIZE+12];
 	static char toip_buff[IP_ADDR_MAX_STR_SIZE+12];
@@ -2156,8 +2514,7 @@ static void trace_onreply_in(struct cell* t, int type, struct tmcb_params *ps)
 	db_vals[2].val.str_val= get_cseq(msg)->method;
 
 	char * str_code = int2str(ps->code, &len);
-	statusbuf[INT2STR_MAX_LEN-1]=0;
-	strncpy(statusbuf, str_code, len >= INT2STR_MAX_LEN ? INT2STR_MAX_LEN-1 : len);
+	memcpy(statusbuf, str_code, len + 1 /* NULL terminated */);
 	db_vals[3].val.str_val.s = statusbuf;
 	db_vals[3].val.str_val.len = len;
 
@@ -2180,9 +2537,11 @@ static void trace_onreply_in(struct cell* t, int type, struct tmcb_params *ps)
 	db_vals[12].val.str_val.len = get_from(msg)->tag_value.len;
 
 	for (instance = info.instances; instance; instance = instance->next) {
-		if (save_siptrace(msg, db_keys,db_vals, instance, info.conn_id) < 0) {
-			LM_ERR("failed to save siptrace\n");
-			goto error;
+		if ( trace_check_legs( instance, leg_flag)) {
+			if (save_siptrace(msg, db_keys,db_vals, instance, info.conn_id)<0){
+				LM_ERR("failed to save siptrace\n");
+				goto error;
+			}
 		}
 	}
 
@@ -2200,15 +2559,29 @@ static void trace_tm_in(struct cell* t, int type, struct tmcb_params *ps)
 	LM_DBG("TM in triggered req=%p, rpl=%p\n",ps->req,ps->rpl);
 	if (ps->req) {
 		/* an incoming request: a retransmission or hop-by-hop ACK */
-		sip_trace( ps->req,  (trace_info_p)(*ps->param) );
+		sip_trace( ps->req,  (trace_info_p)(*ps->param), TRACE_C_CALLER );
 	} else if (ps->rpl) {
 		/* an incoming reply for us or for a CANCEL */
-		trace_onreply_in( t, type, ps);
+		trace_onreply_in( t, type, ps, TRACE_C_CALLEE);
+	}
+}
+
+static void trace_tm_in_rev(struct cell* t, int type, struct tmcb_params *ps)
+{
+	LM_DBG("TM in_rev triggered req=%p, rpl=%p\n",ps->req,ps->rpl);
+	if (ps->req) {
+		/* an incoming request: a retransmission or hop-by-hop ACK */
+		sip_trace( ps->req,  (trace_info_p)(*ps->param), TRACE_C_CALLEE );
+	} else if (ps->rpl) {
+		/* an incoming reply for us or for a CANCEL */
+		trace_onreply_in( t, type, ps, TRACE_C_CALLER);
 	}
 }
 
 
-static void trace_onreply_out(struct cell* t, int type, struct tmcb_params *ps)
+
+static void trace_onreply_out(struct cell* t, int type, struct tmcb_params *ps,
+													int leg_flag)
 {
 	int faked = 0;
 	static char fromip_buff[IP_ADDR_MAX_STR_SIZE+12];
@@ -2336,7 +2709,7 @@ static void trace_onreply_out(struct cell* t, int type, struct tmcb_params *ps)
 		su2ip_addr(&to_ip, &dst->to);
 		set_sock_columns( db_vals[7], db_vals[8], db_vals[9], toip_buff,
 			&to_ip,
-			(unsigned long)(dst->send_sock->last_remote_real_port?
+			(unsigned long)(dst->send_sock && dst->send_sock->last_remote_real_port?
 				dst->send_sock->last_remote_real_port:su_getport(&dst->to)),
 			dst->proto);
 	}
@@ -2349,9 +2722,11 @@ static void trace_onreply_out(struct cell* t, int type, struct tmcb_params *ps)
 	db_vals[12].val.str_val.len = get_from(msg)->tag_value.len;
 
 	for (instance = info.instances; instance; instance = instance->next) {
-		if (save_siptrace(msg, db_keys,db_vals, instance, info.conn_id) < 0) {
-			LM_ERR("failed to save siptrace\n");
-			goto error;
+		if ( trace_check_legs( instance, leg_flag)) {
+			if (save_siptrace(msg, db_keys,db_vals, instance, info.conn_id)<0){
+				LM_ERR("failed to save siptrace\n");
+				goto error;
+			}
 		}
 	}
 
@@ -2369,10 +2744,22 @@ static void trace_tm_out(struct cell* t, int type, struct tmcb_params *ps)
 	LM_DBG("TM out triggered req=%p, rpl=%p\n",ps->req,ps->rpl);
 	if (ps->req) {
 		/* an outgoing request: request itself, local CANCEL or local ACK */
-		trace_onreq_out( t, type, ps);
+		trace_onreq_out( t, type, ps, TRACE_C_CALLEE);
 	} else if (ps->rpl) {
 		/* an outpoing reply (local or relaied) */
-		trace_onreply_out( t, type, ps);
+		trace_onreply_out( t, type, ps, TRACE_C_CALLER);
+	}
+}
+
+static void trace_tm_out_rev(struct cell* t, int type, struct tmcb_params *ps)
+{
+	LM_DBG("TM out_rev triggered req=%p, rpl=%p\n",ps->req,ps->rpl);
+	if (ps->req) {
+		/* an outgoing request: request itself, local CANCEL or local ACK */
+		trace_onreq_out( t, type, ps, TRACE_C_CALLER);
+	} else if (ps->rpl) {
+		/* an outpoing reply (local or relaied) */
+		trace_onreply_out( t, type, ps, TRACE_C_CALLEE);
 	}
 }
 
@@ -2602,6 +2989,16 @@ static mi_response_t *sip_trace_mi_mode(const mi_params_t *params,
 			MI_SSTR("trace mode should be 'on' or 'off'"));
 }
 
+static int parse_trace_syslog_level(modparam_t type, void* val)
+{
+	trace_default_syslog_facility = str2facility((char *)val);
+	if (trace_default_syslog_facility < 0) {
+		LM_ERR("invalid syslog facility [%s]!\n", (char *)val);
+		return -1;
+	}
+	return 0;
+}
+
 static int parse_trace_filter(str *filter_s, enum trace_filter_types *type)
 {
 	if (filter_s->len > 7 && (strncasecmp(filter_s->s, "caller=", 7) == 0)) {
@@ -2758,7 +3155,7 @@ static mi_response_t *sip_trace_mi_dyn(const mi_params_t *params,
 	filters = parse_trace_filters(params);
 
 	/* first check if the destination exists */
-	elem = shm_malloc(sizeof(tlist_dyn_elem_t) + uri.len + name.len);
+	elem = shm_malloc(sizeof(tlist_dyn_elem_t) + uri.len + 1 + name.len);
 	if (!elem) {
 		LM_ERR("could not allocate dynamic elem!\n");
 		goto error;
@@ -2766,16 +3163,37 @@ static mi_response_t *sip_trace_mi_dyn(const mi_params_t *params,
 	memset(elem, 0, sizeof(tlist_dyn_elem_t));
 	p_uri = (char *)(elem + 1);
 	memcpy(p_uri, uri.s, uri.len);
-	p_name = p_uri + uri.len;
+	p_uri[uri.len] = '\0';
+	p_name = p_uri + uri.len + 1;
 	memcpy(p_name, name.s, name.len);
 
-	if (uri_type == TYPE_HEP) {
-		elem->elem.el.hep.name.s = p_uri;
-		elem->elem.el.hep.name.len = uri.len;
-		elem->elem.el.hep.hep_id = hep_id;
-	} else if (parse_uri(p_uri, uri.len, &elem->elem.el.uri) < 0) {
-		LM_ERR("failed to parse the [%.*s] URI\n", uri.len, p_uri);
-		goto error;
+	switch (uri_type) {
+		case TYPE_HEP:
+			elem->elem.el.hep.name.s = p_uri;
+			elem->elem.el.hep.name.len = uri.len;
+			elem->elem.el.hep.hep_id = hep_id;
+			break;
+		case TYPE_SIP:
+			if (parse_uri(p_uri, uri.len, &elem->elem.el.uri) < 0) {
+				LM_ERR("failed to parse the [%.*s] URI\n", uri.len, p_uri);
+				goto error;
+			}
+			break;
+		case TYPE_FILE:
+			if (access(p_uri, trace_file_mode) < 0) {
+				LM_ERR("failed to open [%s] file\n", p_uri);
+				goto error;
+			}
+			elem->elem.el.file.fd = -1;
+			elem->elem.el.file.path = p_uri;
+			break;
+		case TYPE_SYSLOG:
+			if (parse_siptrace_syslog(&uri, &elem->elem.el.syslog) < 0)
+				goto error;
+			break;
+		default:
+			LM_ERR("unknown type %d\n", uri_type);
+			goto error;
 	}
 
 	elem->ref = 1;
@@ -2959,6 +3377,7 @@ static int send_trace_proto_duplicate(trace_dest dest, str* correlation,
 	str *body, *fromproto, *fromip;
 	str *toproto, *toip;
 	unsigned short fromport, toport;
+	str* final_correlation = NULL;
 
 	unsigned long long trans_correlation_id;
 	str conn_id_s;
@@ -3012,7 +3431,12 @@ static int send_trace_proto_duplicate(trace_dest dest, str* correlation,
 		}
 	}
 
-	if (correlation) {
+	if (info->forced_correlation_id.s)
+		final_correlation = &info->forced_correlation_id;
+	else
+		final_correlation = correlation;
+
+	if (final_correlation) {
 		if ( corr_id == -1 && corr_vendor == -1 ) {
 			if (tprot.get_data_id(corr_id_s, &corr_vendor, &corr_id) == 0) {
 				LM_DBG("no data id!\n");
@@ -3020,7 +3444,7 @@ static int send_trace_proto_duplicate(trace_dest dest, str* correlation,
 		}
 
 		if (tprot.add_chunk(trace_msg,
-				correlation->s, correlation->len,
+				final_correlation->s, final_correlation->len,
 					TRACE_TYPE_STR, corr_id, corr_vendor)) {
 			LM_ERR("failed to add correlation id to the packet!\n");
 			goto error;
@@ -3432,7 +3856,7 @@ static int process_dyn_tracing(struct sip_msg *msg, void *param)
 					break;
 			}
 		}
-		if (sip_trace_handle(msg, it, el->type, el->scope, NULL) == 1)
+		if (sip_trace_handle(msg, it, el->type, el->scope, NULL, 0, NULL) == 1)
 			trace_id_ref(el);
 skip:
 		continue;

@@ -34,6 +34,7 @@
 
 #include "api.h"
 #include "node_info.h"
+#include "topology.h"
 #include "clusterer.h"
 
 /* DB */
@@ -187,12 +188,14 @@ int add_node_info(node_info_t **new_info, cluster_info_t **cl_list, int *int_val
 	st.len = hlen;
 
 	if (proto == PROTO_NONE)
-		proto = clusterer_proto;
-	if (proto != clusterer_proto) {
-		LM_ERR("Clusterer currently supports only BIN protocol, but node: %d "
-			"has proto=%d\n", int_vals[INT_VALS_NODE_ID_COL], proto);
+		proto = PROTO_BIN;
+	else if (proto != PROTO_BIN && proto != PROTO_BINS) {
+		LM_ERR("Clusterer currently supports only BIN/BINS protocols, but node: "
+			"%d has proto=%d\n", int_vals[INT_VALS_NODE_ID_COL], proto);
 		return 1;
 	}
+
+	(*new_info)->proto = proto;
 
 	if (int_vals[INT_VALS_NODE_ID_COL] != current_id) {
 		he = sip_resolvehost(&st, (unsigned short *) &port,
@@ -620,16 +623,13 @@ int provision_current(modparam_t type, void *val)
 	return 0;
 }
 
-int update_db_state(int state) {
+int update_db_state(int cluster_id, int node_id, int state) {
 	db_key_t node_id_key = &node_id_col;
 	db_val_t node_id_val;
+	db_key_t cl_node_id_keys[2] = {&node_id_col, &cluster_id_col};
+	db_val_t cl_node_id_vals[2];
 	db_key_t update_key;
 	db_val_t update_val;
-
-	VAL_TYPE(&node_id_val) = DB_INT;
-	VAL_NULL(&node_id_val) = 0;
-	VAL_INT(&node_id_val) = current_id;
-	update_key = &state_col;
 
 	CON_OR_RESET(db_hdl);
 	if (dr_dbf.use_table(db_hdl, &db_table) < 0) {
@@ -637,15 +637,56 @@ int update_db_state(int state) {
 		return -1;
 	}
 
+	update_key = &state_col;
 	VAL_TYPE(&update_val) = DB_INT;
 	VAL_NULL(&update_val) = 0;
 	VAL_INT(&update_val) = state;
 
-	if (dr_dbf.update(db_hdl, &node_id_key, 0, &node_id_val, &update_key,
-		&update_val, 1, 1) < 0)
-		return -1;
+	if (node_id == current_id) {
+		VAL_TYPE(&node_id_val) = DB_INT;
+		VAL_NULL(&node_id_val) = 0;
+		VAL_INT(&node_id_val) = current_id;
+
+		if (dr_dbf.update(db_hdl, &node_id_key, 0, &node_id_val, &update_key,
+			&update_val, 1, 1) < 0)
+			return -1;
+	} else {
+		VAL_TYPE(&cl_node_id_vals[0]) = DB_INT;
+		VAL_NULL(&cl_node_id_vals[0]) = 0;
+		VAL_INT(&cl_node_id_vals[0]) = node_id;
+		VAL_TYPE(&cl_node_id_vals[1]) = DB_INT;
+		VAL_NULL(&cl_node_id_vals[1]) = 0;
+		VAL_INT(&cl_node_id_vals[1]) = cluster_id;
+
+		if (dr_dbf.update(db_hdl, cl_node_id_keys, 0, cl_node_id_vals, &update_key,
+			&update_val, 2, 1) < 0)
+			return -1;
+	}
 
 	return 0;
+}
+
+void free_node_info(node_info_t *info)
+{
+	struct remote_cap *cap, *tmp_cap;
+
+	if (info->url.s)
+		shm_free(info->url.s);
+	if (info->sip_addr.s)
+		shm_free(info->sip_addr.s);
+	if (info->description.s)
+		shm_free(info->description.s);
+	if (info->lock) {
+		lock_destroy(info->lock);
+		lock_dealloc(info->lock);
+	}
+
+	cap = info->capabilities;
+	while (cap != NULL) {
+		tmp_cap = cap;
+		cap = cap->next;
+		shm_free(tmp_cap);
+	}
 }
 
 void free_info(cluster_info_t *cl_list)
@@ -653,7 +694,6 @@ void free_info(cluster_info_t *cl_list)
 	cluster_info_t *tmp_cl;
 	node_info_t *info, *tmp_info;
 	struct local_cap *cl_cap, *tmp_cl_cap;
-	struct remote_cap *cap, *tmp_cap;
 
 	while (cl_list != NULL) {
 		tmp_cl = cl_list;
@@ -661,23 +701,7 @@ void free_info(cluster_info_t *cl_list)
 
 		info = tmp_cl->node_list;
 		while (info != NULL) {
-			if (info->url.s)
-				shm_free(info->url.s);
-			if (info->sip_addr.s)
-				shm_free(info->sip_addr.s);
-			if (info->description.s)
-				shm_free(info->description.s);
-			if (info->lock) {
-				lock_destroy(info->lock);
-				lock_dealloc(info->lock);
-			}
-
-			cap = info->capabilities;
-			while (cap != NULL) {
-				tmp_cap = cap;
-				cap = cap->next;
-				shm_free(tmp_cap);
-			}
+			free_node_info(info);
 
 			tmp_info = info;
 			info = info->next;
@@ -698,6 +722,28 @@ void free_info(cluster_info_t *cl_list)
 
 		shm_free(tmp_cl);
 	}
+}
+
+void remove_node_list(cluster_info_t *cl, node_info_t *node)
+{
+	node_info_t *it;
+
+	if (node == cl->node_list) {
+		cl->node_list = cl->node_list->next;
+		free_node_info(node);
+		shm_free(node);
+		cl->no_nodes--;
+		return;
+	}
+
+	for (it=cl->node_list; it->next; it = it->next)
+		if (it->next == node) {
+			it->next = it->next->next;
+			free_node_info(node);
+			shm_free(node);
+			cl->no_nodes--;
+			return;
+		}
 }
 
 static inline void free_clusterer_node(clusterer_node_t *node)

@@ -82,7 +82,8 @@ static param_export_t mi_params[] = {
 
 
 static proc_export_t mi_procs[] = {
-	{"MI FIFO",  0,  0,  fifo_process,  1 , PROC_FLAG_INITCHILD },
+	{"MI FIFO",  0,  0,  fifo_process,  1 ,
+		PROC_FLAG_INITCHILD|PROC_FLAG_HAS_IPC|PROC_FLAG_NEEDS_SCRIPT },
 	{0,0,0,0,0,0}
 };
 

@@ -42,9 +42,9 @@
 #define DS_RESET_FAIL_DST	4  /* Reset-Failure-Counter */
 #define DS_STATE_DIRTY_DST	8  /* STATE is dirty */
 
-#define DS_PV_ALGO_MARKER	"%u"	/* Marker to indicate where the URI should
-									   be inserted in the pvar */
-#define DS_PV_ALGO_MARKER_LEN (sizeof(DS_PV_ALGO_MARKER) - 1)
+#define DS_PV_ALGO_ID_MARKER   "%i"  /* Marker to indicate where the Set ID should be inserted in the pvar */
+#define DS_PV_ALGO_URI_MARKER  "%u"  /* Marker to indicate where the URI should be inserted in the pvar */
+#define DS_PV_ALGO_MARKER_LEN  2
 
 #define DS_MAX_IPS  32
 
@@ -218,7 +218,7 @@ int ds_count(struct sip_msg *msg, int set_id, void *_cmp, pv_spec_p ret,
 				ds_partition_t *partition);
 
 int ds_is_in_list(struct sip_msg *_m, str *ip, int port, int set,
-                  ds_partition_t *partition, int active_only);
+                  ds_partition_t *partition, int active_only, str *pattern);
 
 int ds_push_script_attrs(struct sip_msg *_m, str *script_attrs, 
 		str *ip, int port, int set, ds_partition_t *partition);

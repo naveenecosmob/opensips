@@ -494,6 +494,12 @@ select,$var(idx),,}{s.select,1,:});
    another. if the session tag does not exist, the default (no
    name) one is used.
 
+   When assigned with the := operator, the value is treated as a
+   JSON, rather than a string/integer. However, the evaluation of
+   the JSON is late, therefore when the CGRateS request is built,
+   if the module is unable to parse the JSON, the value is sent as
+   a string.
+
    Example 1.10. $cgr(name) simple usage
                 ...
                 if (!has_totag()) {
@@ -502,6 +508,8 @@ select,$var(idx),,}{s.select,1,:});
  a tenant
                         $cgr(RequestType) = "*prepaid"; # do prepaid acc
 ounting
+                        $cgr(AttributeIDs) := '["+5551234"]'; # treat as
+ array
                         if (!cgrates_auth("$fU", "$rU")) {
                                 sl_send_reply("403", "Forbidden");
                                 exit;
@@ -706,12 +714,12 @@ Chapter 2. Contributors
    Table 2.1. Top contributors by DevScore^(1), authored
    commits^(2) and lines added/removed^(3)
      Name DevScore Commits Lines ++ Lines --
-   1. Razvan Crainea (@razvancrainea) 166 78 7050 1785
+   1. Razvan Crainea (@razvancrainea) 172 84 7103 1807
    2. Vlad Patrascu (@rvlad-patrascu) 13 9 115 172
    3. Liviu Chircu (@liviuchircu) 9 7 32 48
    4. Bogdan-Andrei Iancu (@bogdan-iancu) 6 4 20 21
-   5. wuhanck 3 1 3 3
-   6. Maksym Sobolyev (@sobomax) 3 1 1 1
+   5. Maksym Sobolyev (@sobomax) 4 2 9 9
+   6. wuhanck 3 1 3 3
    7. Bradley Jokinen 2 1 6 0
    8. Razvan 2 1 4 0
 
@@ -735,13 +743,13 @@ Chapter 2. Contributors
 
    Table 2.2. Most recently active contributors^(1) to this module
                      Name                   Commit Activity
-   1. Razvan Crainea (@razvancrainea)     Dec 2016 - Jun 2020
-   2. Bogdan-Andrei Iancu (@bogdan-iancu) Mar 2017 - Mar 2020
-   3. Vlad Patrascu (@rvlad-patrascu)     May 2017 - Nov 2019
-   4. Liviu Chircu (@liviuchircu)         Nov 2017 - Nov 2019
-   5. Razvan                              Dec 2018 - Dec 2018
-   6. wuhanck                             Apr 2018 - Apr 2018
-   7. Maksym Sobolyev (@sobomax)          Jul 2017 - Jul 2017
+   1. Razvan Crainea (@razvancrainea)     Dec 2016 - May 2021
+   2. Maksym Sobolyev (@sobomax)          Jul 2017 - Jan 2021
+   3. Bogdan-Andrei Iancu (@bogdan-iancu) Mar 2017 - Mar 2020
+   4. Vlad Patrascu (@rvlad-patrascu)     May 2017 - Nov 2019
+   5. Liviu Chircu (@liviuchircu)         Nov 2017 - Nov 2019
+   6. Razvan                              Dec 2018 - Dec 2018
+   7. wuhanck                             Apr 2018 - Apr 2018
    8. Bradley Jokinen                     Jul 2017 - Jul 2017
 
    (1) including any documentation-related commits, excluding
@@ -751,8 +759,8 @@ Chapter 3. Documentation
 
 3.1. Contributors
 
-   Last edited by: Liviu Chircu (@liviuchircu), Vlad Patrascu
-   (@rvlad-patrascu), Razvan Crainea (@razvancrainea).
+   Last edited by: Razvan Crainea (@razvancrainea), Liviu Chircu
+   (@liviuchircu), Vlad Patrascu (@rvlad-patrascu).
 
    Documentation Copyrights:
 

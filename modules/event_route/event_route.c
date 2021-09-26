@@ -46,7 +46,7 @@ static int child_init(int rank);
  */
 static evi_reply_sock* scriptroute_parse(str socket);
 static int scriptroute_raise(struct sip_msg *msg, str* ev_name,
-							 evi_reply_sock *sock, evi_params_t * params);
+	evi_reply_sock *sock, evi_params_t *params, evi_async_ctx_t *async_ctx);
 static int scriptroute_match(evi_reply_sock *sock1, evi_reply_sock *sock2);
 static str scriptroute_print(evi_reply_sock *sock);
 
@@ -334,19 +334,20 @@ int event_route_param_get(struct sip_msg *msg, pv_param_t *ip,
 	return 0;
 }
 
-void route_run(struct action* a, struct sip_msg* msg,
+void route_run(struct script_route route, struct sip_msg* msg,
 		evi_params_t *params, str *event)
 {
 	int old_route_type;
-	route_params_push_level(params, event, event_route_param_get);
+
+	route_params_push_level(NULL, params, event, event_route_param_get);
 	swap_route_type(old_route_type, EVENT_ROUTE);
-	run_top_route(a, msg);
+	run_top_route(route, msg);
 	set_route_type(old_route_type);
 	route_params_pop_level();
 }
 
 static int scriptroute_raise(struct sip_msg *msg, str* ev_name,
-							 evi_reply_sock *sock, evi_params_t *params)
+	evi_reply_sock *sock, evi_params_t *params, evi_async_ctx_t *async_ctx)
 {
 	route_send_t *buf = NULL;
 

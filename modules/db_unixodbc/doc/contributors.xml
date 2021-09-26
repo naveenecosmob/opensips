@@ -61,10 +61,10 @@
 	<row>
 		<entry>6. </entry>
 		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">9</entry>
-		<entry align="center">7</entry>
-		<entry align="center">57</entry>
-		<entry align="center">20</entry>
+		<entry align="center">10</entry>
+		<entry align="center">8</entry>
+		<entry align="center">63</entry>
+		<entry align="center">26</entry>
 	</row>
 	<row>
 		<entry>7. </entry>
@@ -101,7 +101,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Konstantin Bokarius, Alex Massover, Razvan Pistolea, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert, Vlad Paiu (<ulink url="https://github.com/vladpaiu">@vladpaiu</ulink>), Carsten Bock.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Konstantin Bokarius, Alex Massover, Razvan Pistolea, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert, Vlad Paiu (<ulink url="https://github.com/vladpaiu">@vladpaiu</ulink>), Carsten Bock.</para>
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -129,7 +129,7 @@
 	<row>
 		<entry>1. </entry>
 		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">Oct 2011 - Mar 2020</entry>
+		<entry align="center">Oct 2011 - Jan 2021</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
@@ -179,7 +179,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Daniel-Constantin Mierla (<ulink url="https://github.com/miconda">@miconda</ulink>), Konstantin Bokarius, Edson Gellert Schubert, Anca Vamanu, Elena-Ramona Modroiu, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Anonymous, Marco Lorrai.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Daniel-Constantin Mierla (<ulink url="https://github.com/miconda">@miconda</ulink>), Konstantin Bokarius, Edson Gellert Schubert, Anca Vamanu, Elena-Ramona Modroiu, Norman Brandinger (<ulink url="https://github.com/NormB">@NormB</ulink>), Anonymous, Marco Lorrai.</para>
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

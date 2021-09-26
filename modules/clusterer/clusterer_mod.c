@@ -34,9 +34,11 @@
 
 #include "api.h"
 #include "node_info.h"
+#include "topology.h"
 #include "clusterer.h"
 #include "sync.h"
 #include "sharing_tags.h"
+#include "clusterer_evi.h"
 
 int ping_interval = DEFAULT_PING_INTERVAL;
 int node_timeout = DEFAULT_NODE_TIMEOUT;
@@ -80,6 +82,10 @@ static mi_response_t *cluster_send_mi(const mi_params_t *params,
 static mi_response_t *cluster_bcast_mi(const mi_params_t *params,
 								struct mi_handler *async_hdl);
 static mi_response_t *clusterer_list_cap(const mi_params_t *params,
+								struct mi_handler *async_hdl);
+static mi_response_t *clusterer_set_cap_status(const mi_params_t *params,
+								struct mi_handler *async_hdl);
+static mi_response_t *cluster_remove_node(const mi_params_t *params,
 								struct mi_handler *async_hdl);
 
 static void heartbeats_timer_handler(unsigned int ticks, void *param);
@@ -168,6 +174,7 @@ static mi_export_t mi_cmds[] = {
 	},
 	{ "clusterer_set_status", "sets the status for a specified connection", 0,0,{
 		{clusterer_set_status, {"cluster_id", "status", 0}},
+		{clusterer_set_status, {"cluster_id", "node_id", "status", 0}},
 		{EMPTY_MI_RECIPE}}
 	},
 	{ "clusterer_list", "lists the available connections for the specified server", 0,0,{
@@ -192,12 +199,20 @@ static mi_export_t mi_cmds[] = {
 		{clusterer_list_cap, {0}},
 		{EMPTY_MI_RECIPE}}
 	},
+	{ "clusterer_set_cap_status", "sets the status for a capability", 0,0,{
+		{clusterer_set_cap_status, {"cluster_id", "capability", "status", 0}},
+		{EMPTY_MI_RECIPE}}
+	},
 	{ "clusterer_list_shtags", "lists the sharing tags and their states", 0,0,{
 		{shtag_mi_list, {0}},
 		{EMPTY_MI_RECIPE}}
 	},
 	{ "clusterer_shtag_set_active", "switch the status of the give sharing tag to active", 0,0,{
 		{shtag_mi_set_active, {"tag", 0}},
+		{EMPTY_MI_RECIPE}}
+	},
+	{ "clusterer_remove_node", "removes a node from the cluster", 0,0,{
+		{cluster_remove_node, {"cluster_id", "node_id", 0}},
 		{EMPTY_MI_RECIPE}}
 	},
 	{EMPTY_MI_EXPORT}
@@ -223,7 +238,8 @@ static module_dependency_t *get_deps_db_mode(param_export_t *param)
 
 static dep_export_t deps = {
 	{ /* OpenSIPS module dependencies */
-		{ MOD_TYPE_DEFAULT, "proto_bin", DEP_ABORT },
+		{ MOD_TYPE_DEFAULT, "proto_bin",  DEP_SILENT },
+		{ MOD_TYPE_DEFAULT, "proto_bins", DEP_SILENT },
 		{ MOD_TYPE_NULL, NULL, 0 },
 	},
 	{ /* modparam dependencies */
@@ -538,7 +554,7 @@ mi_response_t *clusterer_reload(const mi_params_t *params,
 static mi_response_t *clusterer_set_status(const mi_params_t *params,
 								struct mi_handler *async_hdl)
 {
-	int cluster_id;
+	int cluster_id, node_id;
 	int state;
 	int rc;
 
@@ -547,16 +563,58 @@ static mi_response_t *clusterer_set_status(const mi_params_t *params,
 	if (cluster_id < 1)
 		return init_mi_error(400, MI_SSTR("Bad value for 'cluster_id'"));
 
+	switch (try_get_mi_int_param(params, "node_id", &node_id)) {
+		case -1:
+			node_id = current_id;
+		case 0:
+			if (node_id < 1)
+				return init_mi_error(400, MI_SSTR("Bad value for 'node_id'"));
+			break;
+		default:
+			return init_mi_param_error();
+	}
+
 	if (get_mi_int_param(params, "status", &state) < 0)
 		return init_mi_param_error();
 	if (state != STATE_DISABLED && state != STATE_ENABLED)
 		return init_mi_error(400, MI_SSTR("Bad value for 'status'"));
 
-	rc = cl_set_state(cluster_id, state);
+	rc = cl_set_state(cluster_id, node_id, state);
 	if (rc == -1)
 		return init_mi_error(404, MI_SSTR("Cluster id not found"));
 	if (rc == 1)
 		return init_mi_error(404, MI_SSTR("Node id not found"));
+
+	return init_mi_result_ok();
+}
+
+static mi_response_t *clusterer_set_cap_status(const mi_params_t *params,
+								struct mi_handler *async_hdl)
+{
+	int cluster_id;
+	int status;
+	str capability;
+	int rc;
+
+	if (get_mi_int_param(params, "cluster_id", &cluster_id) < 0)
+		return init_mi_param_error();
+	if (cluster_id < 1)
+		return init_mi_error(400, MI_SSTR("Bad value for 'cluster_id'"));
+
+	if (get_mi_string_param(params, "capability",
+		&capability.s, &capability.len) < 0)
+		return init_mi_param_error();
+
+	if (get_mi_int_param(params, "status", &status) < 0)
+		return init_mi_param_error();
+	if (status != CAP_DISABLED && status != CAP_ENABLED)
+		return init_mi_error(400, MI_SSTR("Bad value for 'status'"));
+
+	rc = mi_cap_set_state(cluster_id, &capability, status);
+	if (rc == -1)
+		return init_mi_error(404, MI_SSTR("Cluster id not found"));
+	if (rc == -2)
+		return init_mi_error(404, MI_SSTR("Capability not found"));
 
 	return init_mi_result_ok();
 }
@@ -628,6 +686,12 @@ static mi_response_t *clusterer_list(const mi_params_t *params,
 
 			if (add_mi_string(node_item, MI_SSTR("link_state"),
 				val.s, val.len) < 0) {
+				lock_release(n_info->lock);
+				goto error;
+			}
+
+			if (add_mi_string_fmt(node_item, MI_SSTR("state"), "%s",
+				n_info->flags&NODE_STATE_ENABLED ? "enabled" : "disabled") < 0) {
 				lock_release(n_info->lock);
 				goto error;
 			}
@@ -712,6 +776,12 @@ static mi_response_t *clusterer_list_cap(const mi_params_t *params,
 			if (add_mi_string(cap_item, MI_SSTR("state"),
 				(cap->flags & CAP_STATE_OK) ? str_ok.s : str_not_synced.s,
 				(cap->flags & CAP_STATE_OK) ? str_ok.len : str_not_synced.len) < 0) {
+				lock_release(cl->lock);
+				goto error;
+			}
+
+			if (add_mi_string_fmt(cap_item, MI_SSTR("enabled"), "%s",
+				(cap->flags&CAP_STATE_ENABLED) ? "yes" : "no") < 0) {
 				lock_release(cl->lock);
 				goto error;
 			}
@@ -1013,6 +1083,94 @@ static mi_response_t *cluster_bcast_mi(const mi_params_t *params,
 	return run_mi_cmd_local(&cmd_name, cmd_params_arr, no_params);
 }
 
+static mi_response_t *cluster_remove_node(const mi_params_t *params,
+								struct mi_handler *async_hdl)
+{
+	int cluster_id, node_id;
+	int rc;
+	cluster_info_t *cl;
+	node_info_t *node;
+	mi_response_t *resp;
+
+	if (db_mode)
+		return init_mi_error(400, MI_SSTR("Running in DB mode"));
+
+	if (get_mi_int_param(params, "cluster_id", &cluster_id) < 0)
+		return init_mi_param_error();
+	if (cluster_id < 1)
+		return init_mi_error(400, MI_SSTR("Bad value for 'cluster_id'"));
+
+	lock_start_read(cl_list_lock);
+
+	cl = get_cluster_by_id(cluster_id);
+	if (!cl) {
+		LM_ERR("Unknown cluster id [%d]\n", cluster_id);
+		resp = init_mi_error(400, MI_SSTR("Unknown cluster id"));
+		goto error;
+	}
+
+	if (get_mi_int_param(params, "node_id", &node_id) < 0) {
+		resp = init_mi_param_error();
+		goto error;
+	}
+	if (node_id < 1) {
+		resp = init_mi_error(400, MI_SSTR("Bad value for 'node_id'"));
+		goto error;
+	}
+
+	node = get_node_by_id(cl, node_id);
+	if (!node) {
+		LM_ERR("Unknown node id [%d]\n", node_id);
+		resp = init_mi_error(400, MI_SSTR("Unknown node id"));
+		goto error;
+	}
+
+	lock_stop_read(cl_list_lock);
+
+	rc = bcast_remove_node(cluster_id, node_id);
+	switch (rc) {
+		case CLUSTERER_SEND_SUCCESS:
+			LM_DBG("Remove node <%d> command sent\n", node_id);
+			break;
+		case CLUSTERER_CURR_DISABLED:
+			LM_INFO("Local node disabled, remove node <%d> command not sent\n",
+				node_id);
+			break;
+		case CLUSTERER_DEST_DOWN:
+			LM_ERR("All nodes down, remove node <%d> command not sent\n",
+				node_id);
+			break;
+		case CLUSTERER_SEND_ERR:
+			LM_ERR("Error sending remove node <%d> command\n", node_id);
+			break;
+	}
+
+	lock_start_write(cl_list_lock);
+
+	cl = get_cluster_by_id(cluster_id);
+	if (!cl) {
+		LM_ERR("Unknown cluster id [%d]\n", cluster_id);
+		lock_stop_write(cl_list_lock);
+		return init_mi_error(400, MI_SSTR("Unknown cluster id"));
+	}
+
+	node = get_node_by_id(cl, node_id);
+	if (!node) {
+		LM_ERR("Unknown node id [%d]\n", node_id);
+		lock_stop_write(cl_list_lock);
+		return init_mi_error(400, MI_SSTR("Unknown node id"));
+	}
+
+	remove_node(cl, node);
+
+	lock_stop_write(cl_list_lock);
+
+	return init_mi_result_ok();
+error:
+	lock_stop_read(cl_list_lock);
+	return resp;
+}
+
 static void heartbeats_timer_handler(unsigned int ticks, void *param)
 {
 	heartbeats_timer();
@@ -1212,6 +1370,9 @@ int load_clusterer(struct clusterer_binds *binds)
 	binds->shtag_activate = shtag_activate;
 	binds->shtag_get_all_active = shtag_get_all_active;
 	binds->shtag_register_callback = shtag_register_callback;
+	binds->shtag_get_sync_status = shtag_get_sync_status;
+	binds->shtag_set_sync_status = shtag_set_sync_status;
+	binds->shtag_sync_all_backup = shtag_sync_all_backup;
 
 	return 1;
 }

@@ -133,7 +133,7 @@ int run_dlg_script_route(struct dlg_cell *dlg, int rt_idx)
 	swap_route_type(old_route_type, REQUEST_ROUTE);
 
 	/************* actual run sequance ****************/
-	run_top_route( sroutes->request[rt_idx].a, fake_msg);
+	run_top_route( sroutes->request[rt_idx], fake_msg);
 
 	/************* post-run sequance ****************/
 
@@ -377,6 +377,15 @@ static inline str* extract_mangled_fromuri(str *mangled_from_hdr)
 	return &extracted_from_uri;
 }
 
+static inline void dlg_release_cloned_leg(struct dlg_cell *dlg)
+{
+	struct dlg_leg *leg = &dlg->legs[dlg->legs_no[DLG_LEGS_USED] - 1];
+	shm_free(leg->adv_contact.s);
+	if (leg->out_sdp.s)
+		shm_free(leg->out_sdp.s);
+	dlg->legs_no[DLG_LEGS_USED]--;
+}
+
 static inline void push_reply_in_dialog(struct sip_msg *rpl, struct cell* t,
 				struct dlg_cell *dlg,str *mangled_from,str *mangled_to)
 {
@@ -434,6 +443,7 @@ static inline void push_reply_in_dialog(struct sip_msg *rpl, struct cell* t,
 	if (update_leg_info(leg, dlg, rpl, &tag,extract_mangled_fromuri(mangled_from),
 				extract_mangled_touri(mangled_to)) !=0) {
 		LM_ERR("could not add further info to the dialog\n");
+		dlg_release_cloned_leg(dlg);
 		goto out;
 	}
 
@@ -559,6 +569,7 @@ static void dlg_onreply(struct cell* t, int type, struct tmcb_params *param)
 			case 1:
 				/* dlg inserted in timer list with new expire (reference it)*/
 				ref_dlg(dlg,1);
+				dlg->lifetime_dirty = 0;
 			}
 		} else {
 			init_dlg_term_reason(dlg,"Cancelled",sizeof("Cancelled")-1);
@@ -858,7 +869,6 @@ static void dlg_update_callee_sdp(struct cell* t, int type,
 			return;
 		}
 
-		dlg_update_contact(dlg, msg, callee_idx(dlg));
 		dlg_update_out_sdp(dlg, callee_idx(dlg), DLG_CALLER_LEG, msg, 0);
 
 		free_sip_msg(msg);
@@ -916,12 +926,73 @@ static void dlg_update_caller_sdp(struct cell* t, int type,
 			return;
 		}
 
-		dlg_update_contact(dlg, msg, DLG_CALLER_LEG);
 		dlg_update_out_sdp(dlg, DLG_CALLER_LEG, callee_idx(dlg),msg, 0);
 
 		free_sip_msg(msg);
 		pkg_free(msg);
 	}
+}
+
+static void dlg_update_caller_rpl_contact(struct cell* t, int type,
+		struct tmcb_params *ps)
+{
+	struct sip_msg *rpl;
+	int statuscode;
+	struct dlg_cell *dlg;
+
+	if(ps == NULL || ps->rpl == NULL) {
+			LM_ERR("Wrong tmcb params\n");
+			return;
+	}
+	if( ps->param== NULL ) {
+			LM_ERR("Null callback parameter\n");
+			return;
+	}
+
+	rpl = ps->rpl;
+	statuscode = ps->code;
+	dlg = *(ps->param);
+
+	if(rpl==NULL || rpl==FAKED_REPLY) {
+		/* we only care about actual replayed replies */
+		return;
+	}
+
+	LM_DBG("Status Code received =  [%d]\n", statuscode);
+
+	if (statuscode >= 200 && statuscode < 300)
+		dlg_update_contact(dlg, rpl, DLG_CALLER_LEG);
+}
+
+static void dlg_update_callee_rpl_contact(struct cell* t, int type,
+		struct tmcb_params *ps)
+{
+	struct sip_msg *rpl;
+	int statuscode;
+	struct dlg_cell *dlg;
+
+	if(ps == NULL || ps->rpl == NULL) {
+			LM_ERR("Wrong tmcb params\n");
+			return;
+	}
+	if( ps->param== NULL ) {
+			LM_ERR("Null callback parameter\n");
+			return;
+	}
+
+	rpl = ps->rpl;
+	statuscode = ps->code;
+	dlg = *(ps->param);
+
+	if(rpl==NULL || rpl==FAKED_REPLY) {
+		/* we only care about actual replayed replies */
+		return;
+	}
+
+	LM_DBG("Status Code received =  [%d]\n", statuscode);
+
+	if (statuscode >= 200 && statuscode < 300)
+		dlg_update_contact(dlg, rpl, callee_idx(dlg));
 }
 
 static void dlg_seq_up_onreply_mod_cseq(struct cell* t, int type,
@@ -1327,7 +1398,7 @@ out_free:
 static inline int dlg_update_contact(struct dlg_cell *dlg, struct sip_msg *msg,
 											unsigned int leg)
 {
-	str contact, contact_hdr;
+	str contact;
 	char *tmp;
 	int ret = 0;
 	contact_t *ct = NULL;
@@ -1349,14 +1420,6 @@ static inline int dlg_update_contact(struct dlg_cell *dlg, struct sip_msg *msg,
 		LM_DBG("Found unparsed contact [%.*s]\n", contact.len, contact.s);
 	} else {
 		contact = ((contact_body_t *)msg->contact->parsed)->contacts->uri;
-	}
-	contact_hdr.s = msg->contact->name.s;
-	contact_hdr.len = msg->contact->len;
-
-	if ((dlg->mod_flags & TOPOH_ONGOING) &&
-			str_strcmp(&dlg->legs[other_leg(dlg, leg)].adv_contact, &contact_hdr) == 0) {
-		LM_DBG("skip updating topo hiding advertised contact\n");
-		goto end;
 	}
 
 	if (dlg->legs[leg].contact.s) {
@@ -1944,8 +2007,6 @@ after_unlock5:
 		if (current_processing_ctx && (ctx_timeout_get()!=0) ) {
 			dlg->lifetime = ctx_timeout_get();
 			dlg->lifetime_dirty = 1;
-		} else {
-			dlg->lifetime_dirty = 0;
 		}
 
 		/* within dialog request */
@@ -1962,6 +2023,7 @@ after_unlock5:
 			case 1:
 				/* dlg inserted in timer list with new expire (reference it)*/
 				ref_dlg(dlg,1);
+				dlg->lifetime_dirty = 0;
 			}
 		}
 		LM_DBG("dialog_timeout: %d\n", dlg->lifetime);
@@ -2001,6 +2063,14 @@ after_unlock5:
 					(void*)dlg, unreference_dialog)<0 ) {
 						LM_ERR("failed to register TMCB (2)\n");
 							unref_dlg( dlg , 1);
+					} else {
+						ref_dlg( dlg , 1);
+						if ( d_tmb.register_tmcb( req, 0, TMCB_RESPONSE_FWDED,
+						(dir==DLG_DIR_UPSTREAM)?dlg_update_caller_rpl_contact:
+						dlg_update_callee_rpl_contact, (void*)dlg, unreference_dialog)<0 ) {
+							LM_ERR("failed to register TMCB (4)\n");
+								unref_dlg( dlg , 1);
+						}
 					}
 				}
 			}
@@ -2038,9 +2108,6 @@ after_unlock5:
 
 			if (ok) {
 				dlg->flags |= DLG_FLAG_CHANGED;
-				/* unmark dlg as loaded from DB (otherwise it would have been
-				 * dropped later when syncing from cluster is done) */
-				dlg->flags &= ~DLG_FLAG_FROM_DB;
 				if (dlg_db_mode==DB_MODE_REALTIME)
 					update_dialog_dbinfo(dlg);
 
@@ -2139,9 +2206,6 @@ early_check:
 
 	if(new_state==DLG_STATE_CONFIRMED && old_state==DLG_STATE_CONFIRMED_NA){
 		dlg->flags |= DLG_FLAG_CHANGED;
-		/* unmark dlg as loaded from DB (otherwise it would have been
-		 * dropped later when syncing from cluster is done) */
-		dlg->flags &= ~DLG_FLAG_FROM_DB;
 		if (dlg_db_mode == DB_MODE_REALTIME)
 			update_dialog_dbinfo(dlg);
 
@@ -2697,8 +2761,8 @@ int dlg_validate_dialog( struct sip_msg* req, struct dlg_cell *dlg)
 	return 0;
 }
 
-int terminate_dlg(str *callid, unsigned int h_entry, unsigned int h_id,
-	str *reason)
+int terminate_dlg(const str *callid, unsigned int h_entry, unsigned int h_id,
+	const str *reason)
 {
 	struct dlg_cell * dlg = NULL;
 	int ret = 0;

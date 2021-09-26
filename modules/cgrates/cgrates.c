@@ -73,10 +73,10 @@ static int w_pv_get_cgr(struct sip_msg *msg, pv_param_t *param,
 		pv_value_t *val);
 static int w_pv_get_cgr_opt(struct sip_msg *msg, pv_param_t *param,
 		pv_value_t *val);
-static int pv_parse_cgr(pv_spec_p sp, str *in);
-static int w_pv_parse_cgr(pv_spec_p sp, str *in);
-static int w_pv_parse_cgr_warn(pv_spec_p sp, str *in);
-static int pv_parse_idx_cgr(pv_spec_p sp, str *in);
+static int pv_parse_cgr(pv_spec_p sp, const str *in);
+static int w_pv_parse_cgr(pv_spec_p sp, const str *in);
+static int w_pv_parse_cgr_warn(pv_spec_p sp, const str *in);
+static int pv_parse_idx_cgr(pv_spec_p sp, const str *in);
 static int pv_get_cgr_reply(struct sip_msg *msg, pv_param_t *param,
 		pv_value_t *val);
 
@@ -443,6 +443,7 @@ static int pv_set_cgr(struct sip_msg *msg, pv_param_t *param,
 	} else
 		return 0; /* initialised with NULL */
 
+	kv->flags &= ~(CGR_KVF_TYPE_NULL|CGR_KVF_TYPE_JSON);
 	if (val->flags & PV_VAL_NULL) {
 		kv->flags |= CGR_KVF_TYPE_NULL;
 	} else if (val->flags & PV_VAL_INT) {
@@ -458,6 +459,8 @@ static int pv_set_cgr(struct sip_msg *msg, pv_param_t *param,
 		kv->value.s.len = val->rs.len;
 		kv->flags |= CGR_KVF_TYPE_STR;
 	}
+	if (op == COLONEQ_T)
+		kv->flags |= CGR_KVF_TYPE_JSON;
 	LM_DBG("add cgr kv: %d %s in %p\n", kv->key.len, kv->key.s, s);
 
 	return 0;
@@ -601,7 +604,7 @@ static int pv_get_cgr_reply(struct sip_msg *msg, pv_param_t *param,
 	return 0;
 }
 
-static int pv_parse_cgr(pv_spec_p sp, str *in)
+static int pv_parse_cgr(pv_spec_p sp, const str *in)
 {
 	char *s;
 	pv_spec_t *pv;
@@ -639,7 +642,7 @@ static int pv_parse_cgr(pv_spec_p sp, str *in)
 	return 0;
 }
 
-static int w_pv_parse_cgr(pv_spec_p sp, str *in)
+static int w_pv_parse_cgr(pv_spec_p sp, const str *in)
 {
 	if (cgre_compat_mode) {
 		LM_WARN("using $cgr_opt(%.*s) in compat mode is not possible!\n",
@@ -650,7 +653,7 @@ static int w_pv_parse_cgr(pv_spec_p sp, str *in)
 	return pv_parse_cgr(sp, in);
 }
 
-static int w_pv_parse_cgr_warn(pv_spec_p sp, str *in)
+static int w_pv_parse_cgr_warn(pv_spec_p sp, const str *in)
 {
 	static int warned = 0;
 	if (!warned) {
@@ -660,7 +663,7 @@ static int w_pv_parse_cgr_warn(pv_spec_p sp, str *in)
 	return pv_parse_cgr(sp, in);
 }
 
-static int pv_parse_idx_cgr(pv_spec_p sp, str *in)
+static int pv_parse_idx_cgr(pv_spec_p sp, const str *in)
 {
 	str *s;
 	pv_spec_t *pv;

@@ -57,9 +57,36 @@ static param_export_t params[]={
 	{ "query_timeout",               INT_PARAM,                &redis_query_tout      },
 	{ "shutdown_on_error",           INT_PARAM,                &shutdown_on_error     },
 	{ "cachedb_url",                 STR_PARAM|USE_FUNC_PARAM, (void *)&set_connection},
+	{ "use_tls",                     INT_PARAM,                &use_tls},
 	{0,0,0}
 };
 
+static module_dependency_t *get_deps_use_tls(param_export_t *param)
+{
+	if (*(int *)param->param_pointer == 0)
+		return NULL;
+
+	return alloc_module_dep(MOD_TYPE_DEFAULT, "tls_mgm", DEP_ABORT);
+}
+
+static module_dependency_t *get_deps_use_tls_openssl(param_export_t *param)
+{
+	if (*(int *)param->param_pointer == 0)
+		return NULL;
+
+	return alloc_module_dep(MOD_TYPE_DEFAULT, "tls_openssl", DEP_ABORT);
+}
+
+static dep_export_t deps = {
+	{
+		{ MOD_TYPE_NULL, NULL, 0 },
+	},
+	{
+		{ "use_tls", get_deps_use_tls },
+		{ "use_tls", get_deps_use_tls_openssl },
+		{ NULL, NULL },
+	},
+};
 
 /** module exports */
 struct module_exports exports= {
@@ -68,7 +95,7 @@ struct module_exports exports= {
 	MODULE_VERSION,
 	DEFAULT_DLFLAGS,			/* dlopen flags */
 	0,							/* load function */
-	NULL,            /* OpenSIPS module dependencies */
+	&deps,                      /* OpenSIPS module dependencies */
 	0,						/* exported functions */
 	0,						/* exported async functions */
 	params,						/* exported parameters */
@@ -115,6 +142,26 @@ static int mod_init(void)
 		return -1;
 	}
 
+	/* check if we have TLS support, as it is not built by defult in libhiredis */
+#ifndef HAVE_REDIS_SSL
+	if (use_tls) {
+		LM_NOTICE("Unable to use TLS connections as libhiredis was not "
+			"compiled with TLS support!\n");
+		use_tls = 0;
+	}
+#endif
+	if (use_tls && load_tls_mgm_api(&tls_api) != 0) {
+		LM_ERR("failed to load tls_mgm API!\n");
+		return -1;
+	}
+
+	/* check if openssl is the configured library in order to have properly
+	 * initialised SSL_CTXes */
+	if (use_tls && tls_api.get_tls_library_used() != TLS_LIB_OPENSSL) {
+		LM_ERR("tls_mgm has to use the openssl library\n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -124,7 +171,7 @@ static int child_init(int rank)
 	cachedb_con *con;
 
 	for (it = redis_script_urls;it;it=it->next) {
-		LM_DBG("iterating through conns - [%.*s]\n",it->url.len,it->url.s);
+		LM_DBG("iterating through conns - [%s]\n", db_url_escape(&it->url));
 		con = redis_init(&it->url);
 		if (con == NULL) {
 			LM_ERR("failed to open connection\n");

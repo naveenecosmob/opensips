@@ -47,6 +47,9 @@
 #define B2B_REQUEST   0
 #define B2B_REPLY     1
 
+#define B2B_NOTIFY_FL_TERMINATED (1<<0)
+#define B2B_NOTIFY_FL_ACK_NEG    (1<<1)
+
 enum b2b_entity_type {B2B_SERVER=0, B2B_CLIENT, B2B_NONE};
 
 typedef struct client_info
@@ -99,6 +102,17 @@ typedef struct b2b_rpl_data
 	b2b_dlginfo_t* dlginfo;
 }b2b_rpl_data_t;
 
+
+typedef int (*b2b_tracer_cb)(struct sip_msg *msg, void *trans, void* param);
+typedef void (*b2b_tracer_freep_cb)( void *param);
+
+struct b2b_tracer {
+	b2b_tracer_cb f;
+	void *param;
+	b2b_tracer_freep_cb f_freep;
+};
+
+
 enum b2b_event_type {B2B_EVENT_CREATE, B2B_EVENT_ACK, B2B_EVENT_UPDATE,
 	B2B_EVENT_DELETE};
 
@@ -106,15 +120,17 @@ typedef void (*b2b_cb_t)(enum b2b_entity_type entity_type, str* entity_key,
 	str *param, enum b2b_event_type event_type, bin_packet_t *storage,
 	int backend);
 
-typedef int (*b2b_notify_t)(struct sip_msg* , str* , int , void* );
+typedef int (*b2b_notify_t)(struct sip_msg* msg, str* key, int type, void* param,
+	int flags);
 typedef int (*b2b_add_dlginfo_t)(str* key, str* entity_key, int src,
 	 b2b_dlginfo_t* info);
 
 
 typedef str* (*b2b_server_new_t) (struct sip_msg* , str* local_contact,
-		b2b_notify_t , str *mod_name, str* param);
+		b2b_notify_t , str *mod_name, str* param, struct b2b_tracer *tracer);
 typedef str* (*b2b_client_new_t) (client_info_t* , b2b_notify_t b2b_cback,
-		b2b_add_dlginfo_t add_dlginfo_f, str *mod_name, str* param);
+		b2b_add_dlginfo_t add_dlginfo_f, str *mod_name, str* param,
+		struct b2b_tracer *tracer);
 
 typedef int (*b2b_send_request_t)(b2b_req_data_t*);
 typedef int (*b2b_send_reply_t)(b2b_rpl_data_t*);

@@ -29,6 +29,7 @@
 
 #include "../../ut.h"
 #include "../../trim.h"
+#include "../../daemonize.h"
 #include "../../dprint.h"
 #include "../../action.h"
 #include "../../route.h"
@@ -45,6 +46,7 @@
 #include "../../db/db_res.h"
 #include "../../str.h"
 #include "../../rw_locking.h"
+#include <fnmatch.h>
 
 #include "dispatch.h"
 #include "ds_fixups.h"
@@ -74,6 +76,11 @@ struct fs_binds fs_api;
 #define dst_is_active(_dst) \
 	(!((_dst).flags&(DS_INACTIVE_DST|DS_PROBING_DST)))
 
+enum ds_pattern_type {
+	DS_PATTERN_NONE=0,
+	DS_PATTERN_ID,
+	DS_PATTERN_URI,
+};
 
 int init_ds_data(ds_partition_t *partition)
 {
@@ -391,8 +398,8 @@ static inline void re_calculate_active_dsts(ds_set_p sp)
 			oldw = dst->weight;
 			dst->weight = round(max_freeswitch_weight *
 			(1 - dst->fs_sock->stats.sess /
-			     (float)dst->fs_sock->stats.max_sess) *
-			(dst->fs_sock->stats.id_cpu / (float)100));
+			     (double)dst->fs_sock->stats.max_sess) *
+			(dst->fs_sock->stats.id_cpu / (double)100));
 
 			LM_DBG("weight update for %.*s: %d -> %d (%d %d %.3f)\n",
 			       dst->uri.len, dst->uri.s, oldw, dst->weight,
@@ -475,8 +482,10 @@ err1:
 
 
 /* variables used to generate the pvar name */
-static int ds_has_pattern = 0;
+static enum ds_pattern_type ds_pattern_one  = DS_PATTERN_NONE;
+static enum ds_pattern_type ds_pattern_two  = DS_PATTERN_NONE;
 static str ds_pattern_prefix = str_init("");
+static str ds_pattern_infix  = str_init("");
 static str ds_pattern_suffix = str_init("");
 
 void ds_pvar_parse_pattern(str pattern)
@@ -486,39 +495,75 @@ void ds_pvar_parse_pattern(str pattern)
 	ds_pattern_prefix = pattern;
 	end = pattern.s + pattern.len - DS_PV_ALGO_MARKER_LEN + 1;
 
-	/* first try to see if we have the marker */
-	for (p = pattern.s; p < end &&
-			memcmp(p, DS_PV_ALGO_MARKER, DS_PV_ALGO_MARKER_LEN); p++);
+	/* first try to see if we have any marker(s) */
+	for (p = pattern.s; p < end; p++) {
+		if (!memcmp(p, DS_PV_ALGO_ID_MARKER, DS_PV_ALGO_MARKER_LEN)) {
+			if (ds_pattern_one>DS_PATTERN_NONE) {
+				ds_pattern_two = DS_PATTERN_ID;
+				/* skip marker */
+				ds_pattern_infix.s = pattern.s + ds_pattern_prefix.len + DS_PV_ALGO_MARKER_LEN;
+				ds_pattern_infix.len = p - pattern.s - ds_pattern_prefix.len - DS_PV_ALGO_MARKER_LEN;
+			} else {
+				ds_pattern_one = DS_PATTERN_ID;
+				ds_pattern_prefix.len = p - pattern.s;
+			}
+		} else if (!memcmp(p, DS_PV_ALGO_URI_MARKER, DS_PV_ALGO_MARKER_LEN)) {
+			if (ds_pattern_one>DS_PATTERN_NONE) {
+				ds_pattern_two = DS_PATTERN_URI;
+				/* skip marker */
+				ds_pattern_infix.s = pattern.s + ds_pattern_prefix.len + DS_PV_ALGO_MARKER_LEN;
+				ds_pattern_infix.len = p - pattern.s - ds_pattern_prefix.len - DS_PV_ALGO_MARKER_LEN;
+			} else {
+				ds_pattern_one = DS_PATTERN_URI;
+				ds_pattern_prefix.len = p - pattern.s;
+			}
+		}
+	}
 
 	/* if reached end - pattern not present => pure pvar */
-	if (p == end) {
+	if (ds_pattern_one==DS_PATTERN_NONE) {
 		LM_DBG("Pattern not found\n");
 		return;
 	}
 
-	ds_has_pattern = 1;
-	ds_pattern_prefix.len = p - pattern.s;
-
 	/* skip marker */
-	ds_pattern_suffix.s = p + DS_PV_ALGO_MARKER_LEN;
+	ds_pattern_suffix.s = pattern.s + ds_pattern_prefix.len + ds_pattern_infix.len 
+							+ ( ds_pattern_two==DS_PATTERN_NONE ? DS_PV_ALGO_MARKER_LEN : 2*DS_PV_ALGO_MARKER_LEN);
 	ds_pattern_suffix.len = pattern.s + pattern.len - ds_pattern_suffix.s;
 }
 
 
-ds_pvar_param_p ds_get_pvar_param(str uri)
+ds_pvar_param_p ds_get_pvar_param(int id, str uri)
 {
-	str name;
-	int len = ds_pattern_prefix.len + uri.len + ds_pattern_suffix.len;
+	str str_id, name;	
+	str_id.s = int2str(id, &str_id.len);
+	int len = ds_pattern_prefix.len + ds_pattern_infix.len + ds_pattern_suffix.len 
+				+ uri.len + str_id.len;
+
 	char buf[len]; /* XXX: check if this works for all compilers */
 	ds_pvar_param_p param;
 
-	if (ds_has_pattern) {
+	if (ds_pattern_one>DS_PATTERN_NONE) {
 		name.len = 0;
 		name.s = buf;
 		memcpy(buf, ds_pattern_prefix.s, ds_pattern_prefix.len);
 		name.len = ds_pattern_prefix.len;
-		memcpy(name.s + name.len, uri.s, uri.len);
-		name.len += uri.len;
+		if (ds_pattern_one==DS_PATTERN_ID) {
+			memcpy(name.s + name.len, str_id.s, str_id.len);
+			name.len += str_id.len;
+		} else if (ds_pattern_one==DS_PATTERN_URI) {
+			memcpy(name.s + name.len, uri.s, uri.len);
+			name.len += uri.len;
+		}
+		memcpy(name.s + name.len, ds_pattern_infix.s, ds_pattern_infix.len);
+		name.len += ds_pattern_infix.len;
+		if (ds_pattern_two==DS_PATTERN_ID) {
+			memcpy(name.s + name.len, str_id.s, str_id.len);
+			name.len += str_id.len;
+		} else if (ds_pattern_two==DS_PATTERN_URI) {
+			memcpy(name.s + name.len, uri.s, uri.len);
+			name.len += uri.len;
+		}
 		memcpy(name.s + name.len, ds_pattern_suffix.s, ds_pattern_suffix.len);
 		name.len += ds_pattern_suffix.len;
 	}
@@ -529,7 +574,7 @@ ds_pvar_param_p ds_get_pvar_param(str uri)
 		return NULL;
 	}
 
-	if (!pv_parse_spec(ds_has_pattern ? &name : &ds_pattern_prefix,
+	if (!pv_parse_spec(ds_pattern_one>DS_PATTERN_NONE ? &name : &ds_pattern_prefix,
 	&param->pvar)) {
 		LM_ERR("cannot parse pattern spec\n");
 		shm_free(param);
@@ -574,7 +619,7 @@ int ds_pvar_algo(struct sip_msg *msg, ds_set_p set, ds_dest_p **sorted_set,
 
 		/* if pvar not set - try to evaluate it */
 		if (set->dlist[i].param == NULL) {
-			param = ds_get_pvar_param(set->dlist[i].uri);
+			param = ds_get_pvar_param(set->id, set->dlist[i].uri);
 			if (param == NULL) {
 				LM_ERR("cannot parse pvar for uri %.*s\n",
 					   set->dlist[i].uri.len, set->dlist[i].uri.s);
@@ -686,8 +731,8 @@ int run_route_algo(struct sip_msg *msg, int rt_idx,ds_dest_p entry)
 {
 	int fret;
 
-	route_params_push_level(entry, NULL, ds_route_param_get);
-	run_top_route_get_code(sroutes->request[rt_idx].a, msg, &fret);
+	route_params_push_level(sroutes->request[rt_idx].name, entry, NULL, ds_route_param_get);
+	fret = _run_actions(sroutes->request[rt_idx].a, msg);
 	route_params_pop_level();
 
 	return fret;
@@ -863,6 +908,9 @@ void ds_flusher_routine(unsigned int ticks, void* param)
 	db_val_t val_set;
 	ds_set_p list;
 	int j;
+
+	if (ticks > 0 && get_osips_state() > STATE_RUNNING)
+		return;
 
 	ds_partition_t *partition;
 	for (partition = partitions; partition; partition = partition->next){
@@ -1732,7 +1780,7 @@ int ds_select_dst(struct sip_msg *msg, ds_select_ctl_p ds_select_ctl,
 			ds_id = 0;
 		break;
 		case 9:
-			if (!ds_has_pattern && ds_pattern_prefix.len == 0 ) {
+			if (ds_pattern_one==DS_PATTERN_NONE && ds_pattern_prefix.len == 0 ) {
 				LM_WARN("no pattern specified - using first entry...\n");
 				ds_select_ctl->alg = 8;
 				break;
@@ -1745,6 +1793,7 @@ int ds_select_dst(struct sip_msg *msg, ds_select_ctl_p ds_select_ctl,
 			}
 			selected = sorted_set[0];
 			ds_id = 0;
+		break;
 		case 10:
 			if (algo_route_param.s == NULL || algo_route_param.len == 0) {
 				LM_ERR("No hash_route param provided \n");
@@ -2259,17 +2308,28 @@ int ds_set_state_repl(int group, str *address, int state, int type,
  * (set-id or -1 for all sets)
  */
 int ds_is_in_list(struct sip_msg *_m, str *_ip, int port, int set,
-                  ds_partition_t *partition, int active_only)
+                  ds_partition_t *partition, int active_only, str *pattern_s)
 {
 	pv_value_t val;
 	ds_set_p list;
 	struct ip_addr *ip;
 	int_str avp_val;
 	int j,k;
+	char *pattern = NULL;
 
 	if (!(ip = str2ip(_ip)) && !(ip = str2ip6(_ip))) {
 		LM_ERR("IP val is not IP <%.*s>\n",val.rs.len,val.rs.s);
 		return -1;
+	}
+
+	if (pattern_s) {
+		pattern = pkg_malloc(pattern_s->len + 1);
+		if (!pattern) {
+			LM_ERR("oom for pattern!\n");
+			return -1;
+		}
+		memcpy(pattern, pattern_s->s, pattern_s->len);
+		pattern[pattern_s->len] = '\0';
 	}
 
 	memset(&val, 0, sizeof(pv_value_t));
@@ -2290,6 +2350,13 @@ int ds_is_in_list(struct sip_msg *_m, str *_ip, int port, int set,
 						/* matching destination */
 						if (active_only && !dst_is_active(list->dlist[j]) )
 							continue;
+						/* matching pattern - already null terminated :D */
+						if (pattern) {
+							if (!list->dlist[j].attrs.s)
+								continue;
+							if (fnmatch(pattern, list->dlist[j].attrs.s, FNM_PERIOD) != 0)
+								continue;
+						}
 						if(set==-1 && ds_setid_pvname.s!=0) {
 							val.ri = list->id;
 							if(pv_set_value(_m, &ds_setid_pv,
@@ -2314,6 +2381,8 @@ int ds_is_in_list(struct sip_msg *_m, str *_ip, int port, int set,
 						}
 
 						lock_stop_read( partition->lock );
+						if (pattern)
+							pkg_free(pattern);
 						return 1;
 					}
 				}
@@ -2323,16 +2392,18 @@ int ds_is_in_list(struct sip_msg *_m, str *_ip, int port, int set,
 
 error:
 	lock_stop_read( partition->lock );
+	if (pattern)
+		pkg_free(pattern);
 	return -1;
 }
 
 
 int ds_print_mi_list(mi_item_t *part_item, ds_partition_t *partition, int full)
 {
-	int len, j;
+	int len, i, j;
 	char* p;
 	ds_set_p list;
-	mi_item_t *sets_arr, *set_item, *dests_arr, *dest_item;
+	mi_item_t *sets_arr, *set_item, *dests_arr, *dest_item, *addr_arr;
 
 	if ( (*partition->data)->sets==NULL ) {
 		LM_DBG("empty destination sets\n");
@@ -2417,6 +2488,17 @@ int ds_print_mi_list(mi_item_t *part_item, ds_partition_t *partition, int full)
 						list->dlist[j].description.s,
 						list->dlist[j].description.len) < 0)
 						goto error;
+			}
+
+			addr_arr = add_mi_array(dest_item, MI_SSTR("resolved_addresses"));
+			if (!addr_arr)
+				goto error;
+
+			for (i = 0; i < list->dlist[j].ips_cnt; i++) {
+				if (add_mi_string_fmt(addr_arr, NULL, 0, "%s:%d",
+				        ip_addr2a(&list->dlist[j].ips[i]),
+				        list->dlist[j].ports[i]) != 0)
+				    goto error;
 			}
 		}
 	}
@@ -2504,6 +2586,7 @@ void ds_check_timer(unsigned int ticks, void* param)
 	ds_partition_t *partition;
 	dlg_t *dlg;
 	ds_set_p list;
+	int_str val;
 	int j;
 
 	if ( !ds_cluster_shtag_is_active() )
@@ -2555,6 +2638,18 @@ void ds_check_timer(unsigned int ticks, void* param)
 						LM_CRIT("No more shared memory\n");
 						continue;
 					}
+
+					if (partition->attrs_avp_name>=0) {
+						val.s = list->dlist[j].attrs;
+						dlg->avps = new_avp(
+							AVP_VAL_STR|partition->attrs_avp_type,
+							partition->attrs_avp_name, val);
+						// we do not care if the adding failed, there will
+						// be no attr AVP exposed in local route
+						if (dlg->avps)
+							dlg->avps->next = NULL;
+					}
+
 					cb_param->partition = partition;
 					cb_param->set_id = list->id;
 					if (tmb.t_request_within(&ds_ping_method,
@@ -2580,6 +2675,9 @@ void ds_update_weights(unsigned int ticks, void *param)
 {
 	ds_partition_t *part;
 	ds_set_p sp;
+
+	if (get_osips_state() > STATE_RUNNING)
+		return;
 
 	for (part = partitions; part; part = part->next) {
 		lock_start_write(part->lock);

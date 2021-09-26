@@ -101,8 +101,9 @@ typedef int (*mod_proc_wrapper)();
 	OPENSIPS_COMPILE_FLAGS
 
 
-#define PROC_FLAG_INITCHILD  (1<<0)
-#define PROC_FLAG_HAS_IPC    (1<<1)
+#define PROC_FLAG_INITCHILD    (1<<0)
+#define PROC_FLAG_HAS_IPC      (1<<1)
+#define PROC_FLAG_NEEDS_SCRIPT (1<<2)
 
 
 struct param_export_ {
@@ -132,10 +133,15 @@ struct sr_module{
 	char* path;
 	void* handle;
 	int init_done;
+	int init_child_done;
+	int destroy_done;
 	struct module_exports* exports;
 
-	/* a list of module dependencies */
-	struct sr_module_dep *sr_deps;
+	/* modules which must be initialized before this module */
+	struct sr_module_dep *sr_deps_init;
+
+	/* modules which must be destroyed before this module */
+	struct sr_module_dep *sr_deps_destroy;
 
 	struct sr_module* next;
 };

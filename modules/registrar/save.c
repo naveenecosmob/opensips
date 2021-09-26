@@ -244,7 +244,7 @@ static inline int insert_contacts(struct sip_msg* _m, contact_t* _c,
 					rerrno = R_INTERNAL;
 					goto error;
 				}
-				if (ul.delete_ucontact( r, r->contacts, 0)!=0) {
+				if (ul.delete_ucontact( r, r->contacts, &_sctx->cmatch, 0)!=0) {
 					LM_ERR("failed to remove contact\n");
 					rerrno = R_INTERNAL;
 					goto error;
@@ -279,13 +279,14 @@ static inline int insert_contacts(struct sip_msg* _m, contact_t* _c,
 		if ( r->contacts==0 ||
 		ul.get_ucontact(r, &_c->uri, ci->callid, ci->cseq+1, &_sctx->cmatch,
 		&c)!=0 ){
-			if (ul.insert_ucontact( r, &_c->uri, ci, &c, 0) < 0) {
+			if (ul.insert_ucontact( r, &_c->uri, ci, &_sctx->cmatch,
+				    0, &c) < 0) {
 				rerrno = R_UL_INS_C;
 				LM_ERR("failed to insert contact\n");
 				goto error;
 			}
 		} else {
-			if (ul.update_ucontact( r, c, ci, 0) < 0) {
+			if (ul.update_ucontact( r, c, ci, &_sctx->cmatch, 0) < 0) {
 				rerrno = R_UL_UPD_C;
 				LM_ERR("failed to update contact\n");
 				goto error;
@@ -429,7 +430,7 @@ static inline int update_contacts(struct sip_msg* _m, urecord_t* _r,
 					}
 					LM_DBG("overflow on inserting new contact -> removing "
 						"<%.*s>\n", c_last->c.len, c_last->c.s);
-					if (ul.delete_ucontact( _r, c_last, 0)!=0) {
+					if (ul.delete_ucontact( _r, c_last, &_sctx->cmatch, 0)!=0) {
 						LM_ERR("failed to remove contact\n");
 						goto error;
 					}
@@ -444,12 +445,13 @@ static inline int update_contacts(struct sip_msg* _m, urecord_t* _r,
 
 			/* pack the contact_info */
 			if ( (ci=pack_ci( 0, _c, e, 0, ul.nat_flag, _sctx->flags,
-							&_sctx->ownership_tag, NULL))==0 ) {
+							&_sctx->ownership_tag, &_sctx->cmatch))==0 ) {
 				LM_ERR("failed to extract contact info\n");
 				goto error;
 			}
 
-			if (ul.insert_ucontact( _r, &_c->uri, ci, &c, 0) < 0) {
+			if (ul.insert_ucontact( _r, &_c->uri, ci, &_sctx->cmatch,
+				    0, &c) < 0) {
 				rerrno = R_UL_INS_C;
 				LM_ERR("failed to insert contact\n");
 				goto error;
@@ -466,7 +468,7 @@ static inline int update_contacts(struct sip_msg* _m, urecord_t* _r,
 					c->flags &= ~FL_MEM;
 				}
 
-				if (ul.delete_ucontact(_r, c, 0) < 0) {
+				if (ul.delete_ucontact(_r, c, &_sctx->cmatch, 0) < 0) {
 					rerrno = R_UL_DEL_C;
 					LM_ERR("failed to delete contact\n");
 					goto error;
@@ -496,7 +498,7 @@ static inline int update_contacts(struct sip_msg* _m, urecord_t* _r,
 						}
 						LM_DBG("overflow on update -> removing contact "
 							"<%.*s>\n", c_last->c.len, c_last->c.s);
-						if (ul.delete_ucontact( _r, c_last, 0)!=0) {
+						if (ul.delete_ucontact( _r, c_last, &_sctx->cmatch, 0)!=0) {
 							LM_ERR("failed to remove contact\n");
 							goto error;
 						}
@@ -511,12 +513,12 @@ static inline int update_contacts(struct sip_msg* _m, urecord_t* _r,
 
 				/* pack the contact specific info */
 				if ( (ci=pack_ci( 0, _c, e, 0, ul.nat_flag, _sctx->flags,
-								&_sctx->ownership_tag, NULL))==0 ) {
+								&_sctx->ownership_tag, &_sctx->cmatch))==0 ) {
 					LM_ERR("failed to pack contact specific info\n");
 					goto error;
 				}
 
-				if (ul.update_ucontact(_r, c, ci, 0) < 0) {
+				if (ul.update_ucontact(_r, c, ci, &_sctx->cmatch, 0) < 0) {
 					rerrno = R_UL_UPD_C;
 					LM_ERR("failed to update contact\n");
 					goto error;
@@ -622,6 +624,7 @@ int save_aux(struct sip_msg* _m, str* forced_binding, void* _d, str* flags_s,
 	rerrno = R_FINE;
 	memset( &sctx, 0 , sizeof(sctx));
 
+	sctx.cmatch.mode = CT_MATCH_NONE;
 	sctx.min_expires = min_expires;
 	sctx.max_expires = max_expires;
 	if ( flags_s )
@@ -957,8 +960,10 @@ int _remove(struct sip_msg *msg, void *udomain, str *aor_uri, str *match_ct,
 			goto out_unlock;
 		}
 
+		struct sockaddr_in daddr;
+		memcpy(&daddr.sin_addr, he->h_addr_list[0], sizeof(daddr.sin_addr));
 		LM_DBG("Delete by host: '%s'\n",
-		        inet_ntoa(*(struct in_addr *)(he->h_addr_list[0])));
+		        inet_ntoa(daddr.sin_addr));
 
 		if (hostent_cpy(&delete_nh_he, he) != 0) {
 			LM_ERR("no more pkg mem\n");
@@ -984,9 +989,11 @@ int _remove(struct sip_msg *msg, void *udomain, str *aor_uri, str *match_ct,
 			continue;
 		}
 
+		struct sockaddr_in daddr;
+		memcpy(&daddr.sin_addr, he->h_addr_list[0], sizeof(daddr.sin_addr));
 		LM_DBG("next hop is [%.*s] resolving to [%s]\n",
 			contact->next_hop.name.len, contact->next_hop.name.s,
-			inet_ntoa(*(struct in_addr *)(he->h_addr_list[0])));
+			inet_ntoa(daddr.sin_addr));
 
 		if (match_next_hop) {
 			if (memcmp(delete_nh_he.h_addr_list[0],
@@ -1005,7 +1012,7 @@ int _remove(struct sip_msg *msg, void *udomain, str *aor_uri, str *match_ct,
 				continue;
 		}
 
-		ul.delete_ucontact(record, contact, 0);
+		ul.delete_ucontact(record, contact, NULL, 0);
 	}
 
 	ul.release_urecord(record, 0);

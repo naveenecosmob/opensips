@@ -34,8 +34,13 @@
 #ifndef _STATISTICS_H_
 #define _STATISTICS_H_
 
-#include "hash_func.h"
+#ifdef HAVE_STDATOMIC
+#include <stdatomic.h>
+#else
 #include "atomic.h"
+#endif
+
+#include "hash_func.h"
 
 #define STATS_HASH_POWER   8
 #define STATS_HASH_SIZE    (1<<(STATS_HASH_POWER))
@@ -48,11 +53,17 @@
 #define STAT_IS_FUNC   (1<<3)
 #define STAT_NOT_ALLOCATED  (1<<4)
 #define STAT_HIDDEN    (1<<5)
+#define STAT_PER_PROC  (1<<6)
+#define STAT_HAS_GROUP (1<<7)
 
 #ifdef NO_ATOMIC_OPS
 typedef unsigned int stat_val;
 #else
+# ifdef HAVE_STDATOMIC
+typedef _Atomic(unsigned long) stat_val;
+# else
 typedef atomic_t stat_val;
+# endif
 #endif
 
 typedef unsigned long (*stat_function)(void *);
@@ -81,6 +92,13 @@ typedef struct module_stats_ {
 	stat_var *tail;
 } module_stats;
 
+typedef struct group_stats_ {
+	int no;
+	str name;
+	stat_var **vars;
+	struct group_stats_ *next;
+} group_stats;
+
 typedef struct stats_collector_ {
 	int stats_no;
 	int mod_no;
@@ -88,6 +106,7 @@ typedef struct stats_collector_ {
 	stat_var* dy_hstats[STATS_HASH_SIZE];   /* hash with dynamic statistics */
 	void *rwl;      /* lock for protecting dynamic stats/modules */
 	module_stats *amodules;
+	group_stats *groups;
 }stats_collector;
 
 typedef struct stat_export_ {
@@ -124,18 +143,24 @@ int __register_dynamic_stat( str *group, str *name, stat_var **pvar);
 
 int __register_module_stats(char *module, stat_export_t *stats, int unsafe);
 
-int clone_pv_stat_name(str *name, str *clone);
+int clone_pv_stat_name(const str *name, str *clone);
 
 /* returns the first matching statistic (regardless of module index) */
-stat_var* get_stat( str *name );
+stat_var* get_stat( const str *name );
 /*
  * same as above, but only at stat module level
  * mod_idx == -1 makes __get_stat() behave like get_stat()
  */
-stat_var* __get_stat( str *name, int mod_idx );
+stat_var* __get_stat( const str *name, int mod_idx );
 
 module_stats *add_stat_module(char *module);
 module_stats *get_stat_module( str *module);
+str *get_stat_module_name(stat_var *stat);
+
+group_stats *register_stats_group(const char *name);
+int add_stats_group(group_stats *grp, stat_var *stat);
+group_stats *get_stat_group(stat_var *stat);
+group_stats *find_stat_group(str *name);
 
 unsigned int get_stat_val( stat_var *var );
 
@@ -150,6 +175,10 @@ unsigned int get_stat_val( stat_var *var );
  */
 stat_var *get_stat_var_from_num_code(unsigned int numerical_code, int in_codes);
 
+
+void stats_mod_lock(module_stats *mod);
+void stats_mod_unlock(module_stats *mod);
+module_stats *module_stats_iterate(module_stats *mod);
 
 #ifdef NO_ATOMIC_OPS
 #include "locking.h"
@@ -174,6 +203,13 @@ extern gen_lock_t *stat_lock;
 	#define register_tcp_load_stat( _a)     0
 	#define stats_are_ready() 0
 	#define clone_pv_stat_name( _name, _clone) 0
+	#define stats_mod_lock(mod)
+	#define stats_mod_unlock(mod)
+	#define mod_stats_iterate(mod)
+	#define register_stats_group(_name)
+	#define add_stats_group(_g, _s)
+	#define get_stat_group(_s);
+	#define find_stat_group(_n);
 #endif
 
 
@@ -209,20 +245,17 @@ extern gen_lock_t *stat_lock;
 		#define update_stat( _var, _n) \
 			do { \
 				if ( !((_var)->flags&STAT_IS_FUNC) ) {\
-					if ((long)(_n) >= 0L) \
-						atomic_add( _n, (_var)->u.val);\
-					else \
-						atomic_sub( -(_n), (_var)->u.val);\
+					atomic_fetch_add((_var)->u.val, _n); \
 				}\
 			}while(0)
 		#define reset_stat( _var) \
 			do { \
 				if ( ((_var)->flags&(STAT_NO_RESET|STAT_IS_FUNC))==0 ) {\
-					atomic_set( (_var)->u.val, 0);\
+					atomic_store((_var)->u.val, 0); \
 				}\
 			}while(0)
 		#define get_stat_val( _var ) ((unsigned long)\
-			((_var)->flags&STAT_IS_FUNC)?(_var)->u.f((_var)->context):(_var)->u.val->counter)
+			((_var)->flags&STAT_IS_FUNC)?(_var)->u.f((_var)->context):atomic_load((_var)->u.val))
 	#endif /* NO_ATOMIC_OPS */
 
 	#define if_update_stat(_c, _var, _n) \

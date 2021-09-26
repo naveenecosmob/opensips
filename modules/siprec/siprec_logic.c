@@ -194,7 +194,8 @@ int srec_register_callbacks(struct src_sess *sess)
 	return 0;
 }
 
-static int srec_b2b_notify(struct sip_msg *msg, str *key, int type, void *param)
+static int srec_b2b_notify(struct sip_msg *msg, str *key, int type, void *param,
+	int flags)
 {
 	struct b2b_req_data req;
 	struct src_sess *ss;
@@ -224,6 +225,10 @@ static int srec_b2b_notify(struct sip_msg *msg, str *key, int type, void *param)
 		/* wait for a final reply */
 		return 0;
 	} else if (msg->REPLY_STATUS > 300) {
+		/* if this is a re-invite, it was simply declined - do not update
+		 * ongoing media sessions */
+		if (ss->flags & SIPREC_ONGOING)
+			return 0;
 		if (srs_skip_failover(msg->first_line.u.reply.status) ||
 				srs_do_failover(ss) < 0) {
 			LM_DBG("no more to failover!\n");
@@ -250,6 +255,7 @@ static int srec_b2b_notify(struct sip_msg *msg, str *key, int type, void *param)
 		LM_ERR("dialog already in deleted state!\n");
 		goto no_recording;
 	}
+	ss->flags |= SIPREC_ONGOING;
 
 	if (srs_handle_media(msg, ss) < 0) {
 		LM_ERR("cannot handle SRS media!\n");
@@ -348,6 +354,7 @@ static int srs_send_invite(struct src_sess *sess)
 	str param, body;
 	str *client;
 	str hdrs;
+	str ct, contact;
 
 	static str extra_headers = str_init(
 			"Require: siprec" CRLF
@@ -378,7 +385,7 @@ static int srs_send_invite(struct src_sess *sess)
 		ci.extra_headers = &extra_headers;
 	ci.send_sock = sess->socket;
 
-	ci.local_contact.s = contact_builder(sess->socket, &ci.local_contact.len);
+	ct.s = contact_builder(sess->socket, &ct.len);
 
 	if (srs_build_body(sess, &body, SRS_BOTH) < 0) {
 		LM_ERR("cannot generate request body!\n");
@@ -386,23 +393,33 @@ static int srs_send_invite(struct src_sess *sess)
 	}
 	ci.body = &body;
 
+	contact.len = 1 /* < */ + ct.len + 10 /* >;+sip.src */;
+	contact.s = pkg_malloc(contact.len);
+	if (contact.s) {
+		contact.s[0] = '<';
+		memcpy(contact.s + 1, ct.s, ct.len);
+		memcpy(contact.s + 1 + ct.len, ">;+sip.src", 10);
+		ci.local_contact = contact;
+	} else {
+		LM_ERR("could not alloc buffer for adding contact param - sending without param!\n");
+		ci.local_contact = ct;
+	}
+
 	/* XXX: hack to pass a parameter :( */
 	param.s = (char *)&sess;
 	param.len = sizeof(void *);
 	client = srec_b2b.client_new(&ci, srec_b2b_notify, srec_b2b_confirm,
-			&mod_name, (str *)&param);
+			&mod_name, (str *)&param, NULL);
+	pkg_free(body.s);
+	if (contact.s)
+		pkg_free(contact.s);
+	if (ci.extra_headers != &extra_headers)
+		pkg_free(ci.extra_headers->s);
 	if (!client) {
 		LM_ERR("cannot start recording with %.*s!\n",
 				ci.req_uri.len, ci.req_uri.s);
-		pkg_free(body.s);
-		if (ci.extra_headers != &extra_headers)
-			pkg_free(ci.extra_headers->s);
 		return -1;
 	}
-	/* release generated body */
-	pkg_free(body.s);
-	if (ci.extra_headers != &extra_headers)
-		pkg_free(ci.extra_headers->s);
 
 	/* store the key in the param */
 	sess->b2b_key.s = shm_malloc(client->len);

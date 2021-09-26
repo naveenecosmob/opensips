@@ -458,7 +458,7 @@ static int flatten_opensips_cfg(FILE *cfg, const char *cfg_path, str *out)
 
 	if (strlen(out->s) != out->len) {
 		LM_BUG("preprocessed buffer check failed (%lu vs. %d)",
-		       strlen(out->s), out->len);
+		       (unsigned long)strlen(out->s), out->len);
 		LM_ERR("either this is a bug or your script contains '\\0' chars, "
 		        "which are obviously NOT allowed!\n");
 		return -1;
@@ -516,18 +516,22 @@ int cfg_pop(void)
 	return 0;
 }
 
-void cfg_dump_context(const char *file, int line, int colstart, int colend)
+void _cfg_dump_context(const char *file, int line, int colstart, int colend,
+                       int run_once)
 {
 	static int called_before;
 	struct cfg_context *con;
 	int i, iter = 1, len;
 	char *p, *end, *wsbuf, *wb, *hiline;
 
+	if (!file)
+		return;
+
 	for (con = __ccon; con; con = con->next)
 		if (!strcmp(con->path, file))
 			break;
 
-	if (!con || !con->lines[0] || called_before)
+	if (!con || !con->lines[0] || (run_once && called_before))
 		return;
 
 	called_before = 1;

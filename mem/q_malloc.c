@@ -35,20 +35,19 @@
 
 /*useful macros*/
 #define FRAG_END(f)  \
-	((struct qm_frag_end*)((char*)(f)+sizeof(struct qm_frag)+ \
+	((struct qm_frag_end*)(void *)((char*)(f)+sizeof(struct qm_frag)+ \
 	   (f)->size))
 
 #define FRAG_NEXT(f) \
-	((struct qm_frag*)((char*)(f)+sizeof(struct qm_frag)+(f)->size+ \
+	((struct qm_frag*)(void *)((char*)(f)+sizeof(struct qm_frag)+(f)->size+ \
 	   sizeof(struct qm_frag_end)))
 
 #define FRAG_PREV(f) \
-	( (struct qm_frag*) ( ((char*)(f)-sizeof(struct qm_frag_end))- \
-	((struct qm_frag_end*)((char*)(f)-sizeof(struct qm_frag_end)))->size- \
-	   sizeof(struct qm_frag) ) )
+	({struct qm_frag_end *ep = (struct qm_frag_end*)(f) - 1; \
+	 (struct qm_frag*)(void *)((char*)ep - ep->size) - 1;})
 
 #define PREV_FRAG_END(f) \
-	((struct qm_frag_end*)((char*)(f)-sizeof(struct qm_frag_end)))
+	((struct qm_frag_end*)(f)-1)
 
 #define MIN_FRAG_SIZE	QM_ROUNDTO
 #define FRAG_OVERHEAD	(sizeof(struct qm_frag)+sizeof(struct qm_frag_end))
@@ -101,16 +100,9 @@ inline static unsigned long big_hash_idx(unsigned long s)
 
 #ifdef DBG_MALLOC
 
-#ifdef __CPU_x86_64
-#define ST_CHECK_PATTERN   0xf0f0f0f0f0f0f0f0
-#define END_CHECK_PATTERN1 0xc0c0c0c0c0c0c0c0
-#define END_CHECK_PATTERN2 0xabcdefedabcdefed
-#else
-#warning "assuming sizeof(long) = 4"
-#define ST_CHECK_PATTERN   0xf0f0f0f0
-#define END_CHECK_PATTERN1 0xc0c0c0c0
-#define END_CHECK_PATTERN2 0xabcdefed
-#endif
+#define ST_CHECK_PATTERN   (((~0UL) / 255) * 0xf0) /* 0xf0f..0f0f0 */
+#define END_CHECK_PATTERN1 (((~0UL) / 255) * 0xc0) /* 0xc0c..0c0c0 */
+#define END_CHECK_PATTERN2 ((long)0xabcdefedabcdefed)
 
 static  void qm_debug_frag(struct qm_block *qm, struct qm_frag *f)
 {
@@ -192,10 +184,11 @@ struct qm_block *qm_malloc_init(char *address, unsigned long size, char *name)
 
 	/* make address and size multiple of 8*/
 	start=(char*)ROUNDUP((unsigned long) address);
-	LM_DBG("QM_OPTIMIZE=%lu, /ROUNDTO=%lu\n",
-			Q_MALLOC_OPTIMIZE, Q_MALLOC_OPTIMIZE/QM_ROUNDTO);
-	LM_DBG("QM_HASH_SIZE=%lu, qm_block size=%lu\n",
-			QM_HASH_SIZE, (long)sizeof(struct qm_block));
+	LM_DBG("QM_OPTIMIZE=%lu, /ROUNDTO=%lu, %lu-bytes aligned\n",
+			Q_MALLOC_OPTIMIZE, Q_MALLOC_OPTIMIZE/QM_ROUNDTO,
+			(unsigned long)QM_ROUNDTO);
+	LM_DBG("QM_HASH_SIZE=%lu, qm_block size=%zu, frag_size=%zu\n",
+			QM_HASH_SIZE, sizeof(struct qm_block), FRAG_OVERHEAD);
 	LM_DBG("params (%p, %lu), start=%p\n", address, size, start);
 	if (size<start-address) return 0;
 	size-=(start-address);
@@ -212,7 +205,7 @@ struct qm_block *qm_malloc_init(char *address, unsigned long size, char *name)
 		return 0;
 	}
 	end=start+size;
-	qm=(struct qm_block*)start;
+	qm=(struct qm_block*)(void *)start;
 	memset(qm, 0, sizeof(struct qm_block));
 	qm->name=name;
 	qm->size=size;
@@ -223,8 +216,8 @@ struct qm_block *qm_malloc_init(char *address, unsigned long size, char *name)
 	qm->max_real_used = 0;
 	size-=init_overhead;
 
-	qm->first_frag=(struct qm_frag*)(start+ROUNDUP(sizeof(struct qm_block)));
-	qm->last_frag_end=(struct qm_frag_end*)(end-sizeof(struct qm_frag_end));
+	qm->first_frag=(struct qm_frag*)(void *)(start+ROUNDUP(sizeof(struct qm_block)));
+	qm->last_frag_end=(struct qm_frag_end*)(void *)end-1;
 	/* init initial fragment*/
 	qm->first_frag->size=size;
 	qm->last_frag_end->size=size;

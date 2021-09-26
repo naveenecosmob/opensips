@@ -152,6 +152,7 @@ github_handles=(
   ["Jasper Hafkenscheid <hafkensite@users.noreply.github.com>"]="hafkensite"
   ["Jeremy Martinez <jmarti70@harris.com>"]="JeremyMartinez51"
   ["Jiri Kuthan <jiri@iptel.org>"]="jiriatipteldotorg"
+  ["John Burke <john@voxtelesys.net>"]="john08burke"
   ["John Kiniston <johnk@simplybits.com>"]="SB-JohnK"
   ["Juha Heinanen"]="juha-h"
   ["Kobi Eshun <kobi@sightspeed.com>"]="ekobi"
@@ -530,6 +531,9 @@ fix_authors=(
   ["1f14961143343b80e682f8436b353921b7309fb1"]="Christophe Sollet"
   ["034e61d1fed5c2e7ef3917f7e827a562486a0bf7"]="Ron Winacott <ronw@somanetworks.com>"
 
+  # stir_shaken
+  ["129834d125e3179ae60e56e4fc485b1ad74f9cc7"]="John Burke <john@voxtelesys.net>"
+
   # textops
   ["ad7f17082aef12211d85d2f1ec0694c4ff21bbef"]="Christophe Sollet"
   ["ca2a72ee03ce7886a3e47af78da72a8967100db5"]="Hugues Mitonneau"
@@ -611,6 +615,8 @@ mod_renames=(
   [mi_http]=mi_json:1540473075:  # old_module:new_module_since:old_module_until
   [mi_html]=mi_http::1540473075
   [event_stream]=event_jsonrpc
+  [b2b_logic]=b2b_logic:1605638778
+  [b2b_logic_xml]=b2b_logic::1605638778
 )
 
 mk_git_handle() {
@@ -711,8 +717,10 @@ _count_module_changes() {
     local old_mod="${arr[0]}"; local since="${arr[1]}"; local until="${arr[2]}"
     unset IFS
 
-    # this trick helps deal with the mi_html->mi_http, mi_http->mi_json rename
-    [ -z "$3" -o -z "$since" ] && \
+    # deal with renames, e.g.:
+    #   * mi_html->mi_http, mi_http->mi_json
+    #   * b2b_logic->b2b_logic_xml, NEW_MOD->b2b_logic
+    [[ $1 != $old_mod ]] && [ -z "$3" -o -z "$since" ] && \
         _count_module_changes "$old_mod" "$2" "recurse" "$until"
   fi
 
@@ -837,7 +845,7 @@ cat <<EOF >>modules/$1/doc/contributors.xml
 	</tbody>
 	</tgroup>
 	</table>
-	$side_authors_para
+$side_authors_para
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -905,7 +913,7 @@ cat <<EOF >>modules/$1/doc/contributors.xml
 	</tbody>
 	</tgroup>
 	</table>
-	$side_authors_para
+$side_authors_para
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

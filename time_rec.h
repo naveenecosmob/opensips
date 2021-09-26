@@ -1,7 +1,8 @@
 /*
  * Copyright (C) 2001-2003 FhG Fokus
+ * Copyright (C) 2020 OpenSIPS Solutions
  *
- * This file is part of ser, a free SIP server.
+ * This file is part of opensips, a free SIP server.
  *
  * opensips is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,105 +16,129 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
- *
- *
- * History:
- * -------
- * 2003-06-24: file imported from tmrec (bogdan)
- * 2003-xx-xx: file Created (daniel)
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _TIME_REC_H_
 #define _TIME_REC_H_
 
-
-/************************ imported from "ac_tm.h"  ***************************/
-
 #include <time.h>
 
+#include "mem/common.h"
+#include "lib/list.h"
 
-/* USE_YWEEK_U	-- Sunday system - see strftime %U
- * USE_YWEEK_V	-- ISO 8601 - see strftime %V
- * USE_YWEEK_W	-- Monday system - see strftime %W
-*/
+typedef void tmrec;
+typedef void tmrec_expr;
 
-#ifndef USE_YWEEK_U
-# ifndef USE_YWEEK_V
-#  ifndef USE_YWEEK_W
-#   define USE_YWEEK_W
-#  endif
-# endif
-#endif
+#define SHM_ALLOC    1
+#define PKG_ALLOC    2
+#define TR_BYXXX     4
+
+
+tmrec *tmrec_parse(const char *tr, char alloc_type);
+
+int _tmrec_check(const tmrec *tr, time_t check_time);
+static inline int tmrec_check(const tmrec *tr)
+{
+	return _tmrec_check(tr, time(NULL));
+}
+
+void tmrec_free(tmrec *tr);
+
+int tmrec_print(const tmrec *tr);
+
+/**
+ * _tmrec_check_str() - verify that a time recurrence string matches, at the
+ *                      given point in time
+ *
+ * Return:
+ *    1 - match
+ *   -1 - no match
+ *   -2 - parse error (bad input)
+ *   -3 - internal error
+ *
+ * FIXME: @tr must be write-able memory, otherwise I will segfault!
+ */
+int _tmrec_check_str(const char *tr, time_t check_time);
+static inline int tmrec_check_str(const char *tr)
+{
+	return _tmrec_check_str(tr, time(NULL));
+}
+
+
+tmrec_expr *tmrec_expr_parse(const char *trx, char alloc_type);
+
+int _tmrec_expr_check(const tmrec_expr *trx, time_t check_time);
+static inline int tmrec_expr_check(const tmrec_expr *trx)
+{
+	return _tmrec_expr_check(trx, time(NULL));
+}
+
+void tmrec_expr_free(tmrec_expr *trx);
+
+int tmrec_expr_print(const tmrec_expr *trx);
+
+/**
+ * This function expects the @trx string to be trim()'ed beforehand.
+ *
+ * Return:
+ *     1: match
+ *    -1: no match
+ *    -2: parse error (bad input)
+ *    -3: internal error
+ */
+int _tmrec_expr_check_str(const char *trx, time_t check_time);
+static inline int tmrec_expr_check_str(const char *trx)
+{
+	return _tmrec_expr_check_str(trx, time(NULL));
+}
+
+
+/**
+ * Set the current timezone to @tz while also making sure to back up the
+ * existing timezone such that tz_reset() can be later used to restore it.
+ *
+ * If @tz is an invalid timezone, no change will be made.
+ */
+void tz_set(const str *tz);
+void _tz_set(const char *tz);
+
+
+/**
+ * Restore the timezone to the value stored by the last tz_set() call and clear
+ * the currently backed up timezone (i.e. subsequent calls to this function
+ * without calling tz_set() again will be NOPs).
+ */
+void tz_reset(void);
+
+
+/**
+ * Obtain an equivalent to the @unix_time UNIX timestamp
+ * that matches the @tz timezone, including the current DST status
+ *
+ * Note: If @tz == NULL, @unix_time will be ajusted to local time
+ */
+time_t tz_adjust_ts(time_t unix_time, const str *tz);
+
+
+/**
+ * tz_offset() - fetch the GMT offset of the given @tz timezone at the
+ *               current point in time or at the @t UNIX timestamp
+ */
+int _tz_offset(const char *tz, time_t t);
+static inline int tz_offset(const char *tz)
+{
+	return _tz_offset(tz, time(NULL));
+}
+
+
+/*************** RFC 2445/5545 low-level abstractions ****************/
 
 #define FREQ_NOFREQ  0
 #define FREQ_YEARLY  1
 #define FREQ_MONTHLY 2
 #define FREQ_WEEKLY  3
 #define FREQ_DAILY   4
-
-#define WDAY_SU 0
-#define WDAY_MO 1
-#define WDAY_TU 2
-#define WDAY_WE 3
-#define WDAY_TH 4
-#define WDAY_FR 5
-#define WDAY_SA 6
-#define WDAY_NU 7
-
-#define TSW_TSET	1
-#define TSW_RSET	2
-
-#define SHM_ALLOC	0
-#define PKG_ALLOC	1
-
-#define is_leap_year(yyyy) ((((yyyy)%400))?(((yyyy)%100)?(((yyyy)%4)?0:1):0):1)
-
-#define TR_SEPARATOR '|'
-
-#define load_TR_value( _p,_s, _tr, _func, _err, _done) \
-	do{ \
-		_s = strchr(_p, (int)TR_SEPARATOR); \
-		if (_s) \
-			*_s = 0; \
-		/* LM_DBG("----parsing tr param <%s>\n",_p); \ */\
-		if(_s != _p) {\
-			if( _func( _tr, _p)) {\
-				LM_DBG("func error\n"); \
-				if (_s) *_s = TR_SEPARATOR; \
-				goto _err; \
-			} \
-		} \
-		if (_s) { \
-			*_s = TR_SEPARATOR; \
-			_p = _s+1;\
-			if ( *(_p)==0 ) \
-				goto _done; \
-		} else {\
-			goto _done; \
-		}\
-	} while(0)
-
-typedef struct _ac_maxval
-{
-	int yweek;
-	int yday;
-	int ywday;
-	int mweek;
-	int mday;
-	int mwday;
-} ac_maxval_t, *ac_maxval_p;
-
-typedef struct _ac_tm
-{
-	time_t time;
-	struct tm t;
-	int mweek;
-	int yweek;
-	int ywday;
-	int mwday;
-	char flags;
-} ac_tm_t, *ac_tm_p;
 
 typedef struct _tr_byxxx
 {
@@ -122,6 +147,10 @@ typedef struct _tr_byxxx
 	int *req;
 	char flags;
 } tr_byxxx_t, *tr_byxxx_p;
+
+tr_byxxx_p tr_byxxx_new(char);
+int tr_byxxx_init(tr_byxxx_p, int);
+int tr_byxxx_free(tr_byxxx_p);
 
 typedef struct _tmrec
 {
@@ -139,32 +168,25 @@ typedef struct _tmrec
 	tr_byxxx_p byweekno;
 	int wkst;
 	char flags;
+	char *tz;
 } tmrec_t, *tmrec_p;
 
-typedef struct _tr_res
+typedef struct _tmrec_expr
 {
-	int flag;
-	time_t rest;
-} tr_res_t, *tr_res_p;
+	char is_leaf;
+	char flags;
 
+	char op;
+	struct list_head operands;
+	char inverted;
 
-int ac_tm_set_time(ac_tm_p, time_t);
-
-int ac_tm_reset(ac_tm_p);
-
-int ac_get_mweek(struct tm*);
-int ac_get_yweek(struct tm*);
-int ac_get_wkst();
-
-int ac_print(ac_tm_p);
-
-tr_byxxx_p tr_byxxx_new(char);
-int tr_byxxx_init(tr_byxxx_p, int);
-int tr_byxxx_free(tr_byxxx_p);
+	tmrec_t tr;
+	struct list_head list;
+} tmrec_expr_t;
 
 tmrec_p tmrec_new(char);
-int tmrec_free(tmrec_p);
 
+int tr_parse_tz(tmrec_p, char*);
 int tr_parse_dtstart(tmrec_p, char*);
 int tr_parse_dtend(tmrec_p, char*);
 int tr_parse_duration(tmrec_p, char*);
@@ -178,16 +200,5 @@ int tr_parse_bymonth(tmrec_p, char*);
 int tr_parse_byweekno(tmrec_p, char*);
 int tr_parse_wkst(tmrec_p, char*);
 
-int tr_print(tmrec_p);
-time_t ic_parse_datetime(char*,struct tm*);
-time_t ic_parse_duration(char*);
-
-tr_byxxx_p ic_parse_byday(char*, char);
-tr_byxxx_p ic_parse_byxxx(char*, char);
-int ic_parse_wkst(char*);
-
-int check_tmrec(tmrec_p, ac_tm_p, tr_res_p);
-
 
 #endif
-

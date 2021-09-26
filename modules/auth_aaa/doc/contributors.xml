@@ -37,10 +37,10 @@
 	<row>
 		<entry>3. </entry>
 		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">17</entry>
-		<entry align="center">14</entry>
-		<entry align="center">73</entry>
-		<entry align="center">119</entry>
+		<entry align="center">22</entry>
+		<entry align="center">18</entry>
+		<entry align="center">95</entry>
+		<entry align="center">141</entry>
 	</row>
 	<row>
 		<entry>4. </entry>
@@ -101,7 +101,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>), Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Ancuta Onofrei, Anatoly Pidruchny, Peter Nixon, Konstantin Bokarius, Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert.</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>), Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Ancuta Onofrei, Anatoly Pidruchny, Peter Nixon, Konstantin Bokarius, Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>), Edson Gellert Schubert.</para>
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -128,13 +128,13 @@
 	<tbody>
 	<row>
 		<entry>1. </entry>
-		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">Jun 2005 - May 2020</entry>
+		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
+		<entry align="center">Jan 2013 - May 2021</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
-		<entry>Liviu Chircu (<ulink url="https://github.com/liviuchircu">@liviuchircu</ulink>)</entry>
-		<entry align="center">Jan 2013 - Jan 2020</entry>
+		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
+		<entry align="center">Jun 2005 - May 2020</entry>
 	</row>
 	<row>
 		<entry>3. </entry>
@@ -179,7 +179,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	<para><emphasis role='bold'>All remaining contributors</emphasis>: Juha Heinanen (<ulink url="https://github.com/juha-h">@juha-h</ulink>), Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Ancuta Onofrei, Anatoly Pidruchny, Peter Nixon, Jan Janak (<ulink url="https://github.com/janakj">@janakj</ulink>), Andrei Pelinescu-Onciul, Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>).</para>
+<para><emphasis role='bold'>All remaining contributors</emphasis>: Juha Heinanen (<ulink url="https://github.com/juha-h">@juha-h</ulink>), Henning Westerholt (<ulink url="https://github.com/henningw">@henningw</ulink>), Ancuta Onofrei, Anatoly Pidruchny, Peter Nixon, Jan Janak (<ulink url="https://github.com/janakj">@janakj</ulink>), Andrei Pelinescu-Onciul, Jiri Kuthan (<ulink url="https://github.com/jiriatipteldotorg">@jiriatipteldotorg</ulink>).</para>
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

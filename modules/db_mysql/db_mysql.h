@@ -26,17 +26,18 @@
  *  2003-03-16  flags export parameter added (janakj)
  */
 
-#ifndef DB_MOD_H
-#define DB_MOD_H
+#ifndef DB_MYSQL_MOD_H
+#define DB_MYSQL_MOD_H
 
 extern unsigned int db_mysql_timeout_interval;
 extern unsigned int db_mysql_exec_query_threshold;
 extern int max_db_retries;
 extern int max_db_queries;
+extern int ps_max_col_size;
 extern int use_tls;
 
 extern struct tls_mgm_binds tls_api;
 
 int mysql_register_event(void);
 
-#endif /* DB_MOD_H */
+#endif /* DB_MYSQL_MOD_H */

@@ -53,8 +53,10 @@ ALL_MODPKG_LIST := \
 	PRESENCE XMLRPC PERL SNMPSTATS XMPP CROUTE BERKELEY LDAP \
 	GEOIP REGEX IDENTITY B2BUA DBHTTP DIALPLAN MEMCACHED JSON \
 	REDIS RABBITMQ HTTP COMPRESSION EMERGENCY \
-	PROTO_TLS PROTO_WSS TLS_MGM REST_CLIENT LUA \
-	SQLITE CGRATES XML SIPREC PYTHON UUID STIR_SHAKEN
+	PROTO_TLS PROTO_WSS TLS_MGM TLS_OPENSSL TLS_WOLFSSL \
+	REST_CLIENT LUA \
+	SQLITE CGRATES XML SIPREC PYTHON UUID STIR_SHAKEN \
+	PROMETHEUS KAFKA
 # add SCTP only on linux systems
 ifeq ($(DEB_HOST_ARCH_OS),linux)
 	ALL_MODPKG_LIST += PROTO_SCTP
@@ -68,6 +70,16 @@ ifeq ($(MAJOR_RELEASE), unstable)
 endif
 
 # use a dummy architecture for the packages we do not want to build
+ifeq ($(shell dpkg-vendor --derives-from Debian && echo yes),yes)
+	DIAMETER_RELEASE=10
+endif
+ifeq ($(shell dpkg-vendor --derives-from Ubuntu && echo yes),yes)
+	DIAMETER_RELEASE=20
+endif
+ifeq ($(shell test $(MAJOR_RELEASE) -ge $(DIAMETER_RELEASE); echo $$?),0)
+	ALL_MODPKG_LIST += DIAMETER
+endif
+
 ifeq ($(shell dpkg-vendor --derives-from Debian && echo yes),yes)
 	LIBMONGOC_MAJOR_RELEASE=9
 endif
@@ -111,6 +123,9 @@ CPL_MOD_PATH=$(addprefix modules/, $(CPL_MODULES))
 RADIUS_PKGNAME = opensips-radius-modules
 RADIUS_MODULES = aaa_radius peering
 RADIUS_MOD_PATH=$(addprefix modules/, $(RADIUS_MODULES))
+DIAMETER_PKGNAME = opensips-diameter-module
+DIAMETER_MODULES = aaa_diameter
+DIAMETER_MOD_PATH=$(addprefix modules/, $(DIAMETER_MODULES))
 PRESENCE_PKGNAME = opensips-presence-modules
 PRESENCE_MODULES = presence presence_callinfo presence_dialoginfo presence_xml presence_mwi presence_xcapdiff presence_dfks pua pua_bla pua_dialoginfo pua_mi pua_usrloc pua_xmpp rls xcap xcap_client
 PRESENCE_MOD_PATH=$(addprefix modules/, $(PRESENCE_MODULES))
@@ -145,7 +160,7 @@ IDENTITY_PKGNAME = opensips-identity-module
 IDENTITY_MODULES = identity
 IDENTITY_MOD_PATH=$(addprefix modules/, $(IDENTITY_MODULES))
 B2BUA_PKGNAME = opensips-b2bua-module
-B2BUA_MODULES = b2b_entities b2b_logic
+B2BUA_MODULES = b2b_logic_xml
 B2BUA_MOD_PATH=$(addprefix modules/, $(B2BUA_MODULES))
 DBHTTP_PKGNAME = opensips-dbhttp-module
 DBHTTP_MODULES = db_http
@@ -165,6 +180,9 @@ CASSANDRA_MOD_PATH=$(addprefix modules/, $(CASSANDRA_MODULES))
 RABBITMQ_PKGNAME = opensips-rabbitmq-modules
 RABBITMQ_MODULES = event_rabbitmq rabbitmq rabbitmq_consumer
 RABBITMQ_MOD_PATH=$(addprefix modules/, $(RABBITMQ_MODULES))
+KAFKA_PKGNAME = opensips-kafka-module
+KAFKA_MODULES = event_kafka
+KAFKA_MOD_PATH=$(addprefix modules/, $(KAFKA_MODULES))
 LUA_PKGNAME = opensips-lua-module
 LUA_MODULES = lua
 LUA_MOD_PATH=$(addprefix modules/, $(LUA_MODULES))
@@ -186,6 +204,12 @@ PROTO_SCTP_MOD_PATH=$(addprefix modules/, $(PROTO_SCTP_MODULES))
 PROTO_TLS_PKGNAME = opensips-tls-module
 PROTO_TLS_MODULES = proto_tls
 PROTO_TLS_MOD_PATH=$(addprefix modules/, $(PROTO_TLS_MODULES))
+TLS_OPENSSL_PKGNAME = opensips-tls-openssl-module
+TLS_OPENSSL_MODULES = tls_openssl
+TLS_OPENSSL_MOD_PATH=$(addprefix modules/, $(TLS_OPENSSL_MODULES))
+TLS_WOLFSSL_PKGNAME = opensips-tls-wolfssl-module
+TLS_WOLFSSL_MODULES = tls_wolfssl
+TLS_WOLFSSL_MOD_PATH=$(addprefix modules/, $(TLS_WOLFSSL_MODULES))
 PROTO_WSS_PKGNAME = opensips-wss-module
 PROTO_WSS_MODULES = proto_wss
 PROTO_WSS_MOD_PATH=$(addprefix modules/, $(PROTO_WSS_MODULES))
@@ -216,6 +240,9 @@ STIR_SHAKEN_MOD_PATH=$(addprefix modules/, $(STIR_SHAKEN_MODULES))
 UUID_PKGNAME = opensips-uuid-module
 UUID_MODULES = uuid
 UUID_MOD_PATH=$(addprefix modules/, $(UUID_MODULES))
+PROMETHEUS_PKGNAME = opensips-prometheus-module
+PROMETHEUS_MODULES = prometheus
+PROMETHEUS_MOD_PATH=$(addprefix modules/, $(PROMETHEUS_MODULES))
 
 
 # Need this per-package variables available in environment so accessible

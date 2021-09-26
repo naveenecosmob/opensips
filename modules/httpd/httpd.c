@@ -59,12 +59,16 @@ static mi_response_t *mi_list_root_path(const mi_params_t *params,
 int port = 8888;
 str ip = {NULL, 0};
 str buffer = {NULL, 0};
+str tls_cert_file = {NULL, 0};
+str tls_key_file = {NULL, 0};
+str tls_ciphers = {"SECURE256:+SECURE192:-VERS-ALL:+VERS-TLS1.2", 45};
 int post_buf_size = DEFAULT_POST_BUF_SIZE;
 struct httpd_cb *httpd_cb_list = NULL;
 
 
 static proc_export_t mi_procs[] = {
-	{"HTTPD",  0,  0, httpd_proc, 1, PROC_FLAG_INITCHILD },
+	{"HTTPD",  0,  0, httpd_proc, 1,
+		PROC_FLAG_INITCHILD|PROC_FLAG_HAS_IPC|PROC_FLAG_NEEDS_SCRIPT },
 	{NULL, 0, 0, NULL, 0, 0}
 };
 
@@ -75,6 +79,9 @@ static param_export_t params[] = {
 	{"ip",            STR_PARAM, &ip.s},
 	{"buf_size",      INT_PARAM, &buffer.len},
 	{"post_buf_size", INT_PARAM, &post_buf_size},
+	{"tls_cert_file", STR_PARAM, &tls_cert_file.s},
+	{"tls_key_file", STR_PARAM,  &tls_key_file.s},
+	{"tls_ciphers", STR_PARAM, &tls_ciphers.s},
 	{NULL, 0, NULL}
 };
 
@@ -118,11 +125,47 @@ struct module_exports exports = {
 };
 
 
+#if defined MHD_VERSION && MHD_VERSION < 0x00093500
+static long httpd_get_runtime_version(void)
+{
+	char *end, *rend, *vi;
+	const char *ver = MHD_get_version();
+	unsigned long tmp, version = 0;
+	int i;
+
+	vi = ver;
+	rend = ver + strlen(ver);
+	for (i = 1; i < 4; i++) {
+		tmp = strtoul(vi, &end, 16);
+		if (end == vi || end > rend) {
+			LM_ERR("invalid libmicrohttpd version %s at token %d\n", ver, i);
+			return 0;
+		}
+		vi = end + 1;
+		version += tmp;
+		version <<= 8;
+	}
+
+	return version;
+}
+#endif
+
 static int mod_init(void)
 {
 	struct ip_addr *_ip;
 
-
+#if defined MHD_VERSION && MHD_VERSION >= 0x00093500
+	/* Get whether epoll() is supported. If supported then
+	 * Flags MHD_USE_EPOLL and MHD_USE_EPOLL_INTERNAL_THREAD can be used. */
+	if (MHD_is_feature_supported(MHD_FEATURE_EPOLL)!=MHD_YES) {
+#else
+	if (httpd_get_runtime_version() < 0x00095000) {
+#endif
+		LM_CRIT("the version of libmicrohttpd you have does not support "
+			"EPOLL feature, you need a version newer than 0.9.50, but "
+			"running %s\n",MHD_get_version());
+		return -1;
+	}
 	if (ip.s) {
 		ip.len = strlen(ip.s);
 		if ( (_ip=str2ip(&ip)) == NULL ) {
@@ -261,5 +304,3 @@ error:
 	free_mi_response(resp);
 	return 0;
 }
-
-

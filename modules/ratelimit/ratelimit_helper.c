@@ -306,7 +306,7 @@ static str * get_rl_algo_name(rl_algo_t algo)
 	return NULL;
 }
 
-rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo)
+rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo, str *name)
 {
 	rl_pipe_t *pipe;
 	int size = sizeof(rl_pipe_t);
@@ -316,6 +316,10 @@ rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo)
 
 	if (algo == PIPE_ALGO_HISTORY)
 		size += (rl_window_size * 1000) / rl_slot_period * sizeof(long int);
+
+#ifdef RL_DEBUG_PIPES
+	size += name->len;
+#endif
 
 	pipe = shm_malloc(size);
 	if (!pipe) {
@@ -332,6 +336,12 @@ rl_pipe_t *rl_create_pipe(int limit, rl_algo_t algo)
 		pipe->rwin.window_size = (rl_window_size * 1000) / rl_slot_period;
 		/* everything else is already cleared */
 	}
+
+#ifdef RL_DEBUG_PIPES
+	pipe->name.s = ((char *)pipe) + size - name->len;
+	memcpy(pipe->name.s, name->s, name->len);
+	pipe->name.len = name->len;
+#endif
 	return pipe;
 }
 
@@ -382,19 +392,20 @@ int w_rl_check(struct sip_msg *_m, str *name, int *limit, str *algorithm)
 
 	if (!*pipe) {
 		/* allocate new pipe */
-		if (!(*pipe = rl_create_pipe(*limit, algo)))
+		if (!(*pipe = rl_create_pipe(*limit, algo, name)))
 			goto release;
 
 		LM_DBG("Pipe %.*s doesn't exist, but was created %p\n",
 				name->len, name->s, *pipe);
 		if ((*pipe)->algo == PIPE_ALGO_NETWORK)
 			should_update = 1;
+		(*pipe)->last_local_used = time(0);
 	} else {
 		LM_DBG("Pipe %.*s found: %p - last used %lu\n",
 			name->len, name->s, *pipe, (*pipe)->last_used);
 		if (algo != PIPE_ALGO_NOP && (*pipe)->algo != algo) {
 			LM_WARN("algorithm %d different from the initial one %d for pipe "
-				"%.*s", algo, (*pipe)->algo, name->len, name->s);
+				"%.*s\n", algo, (*pipe)->algo, name->len, name->s);
 		}
 		/* update the limit */
 		(*pipe)->limit = *limit;
@@ -476,7 +487,8 @@ void rl_timer(unsigned int ticks, void *param)
 				goto next_pipe;
 			}
 			/* check to see if it is expired */
-			if ((*pipe)->last_used + rl_expire_time < now) {
+			if (((*pipe)->last_local_used + rl_expire_time < now) &&
+				((*pipe)->last_used + rl_expire_time + rl_timer_interval < now)) {
 				/* this pipe is engaged in a transaction */
 				del = it;
 				if (iterator_next(&it) < 0)
@@ -774,11 +786,10 @@ void rl_rcv_bin(bin_packet_t *packet)
 
 		if (!*pipe) {
 			/* if the pipe does not exist, allocate it in case we need it later */
-			if (!(*pipe = rl_create_pipe(limit, algo)))
+			if (!(*pipe = rl_create_pipe(limit, algo, &name)))
 				goto release;
 			LM_DBG("Pipe %.*s doesn't exist, but was created %p\n",
 				name.len, name.s, *pipe);
-
 		} else {
 			LM_DBG("Pipe %.*s found: %p - last used %lu\n",
 				name.len, name.s, *pipe, (*pipe)->last_used);
@@ -801,6 +812,7 @@ void rl_rcv_bin(bin_packet_t *packet)
 			goto release;
 		destination->counter = counter;
 		destination->update = now;
+		RL_DBG(*pipe, "counter=%d id=%d", counter, packet->src_id);
 		RL_RELEASE_LOCK(hash_idx);
 	}
 	return;
@@ -862,12 +874,6 @@ static inline int ALLOW_UNUSED hist_count(rl_pipe_t *pipe)
 
 int rl_repl_init(void)
 {
-	if (rl_buffer_th > (BUF_SIZE * 0.9)) {
-		LM_WARN("Buffer size too big %d - pipe information might get lost",
-			rl_buffer_th);
-		return -1;
-	}
-
 	if (rl_repl_cluster && clusterer_api.register_capability(&pipe_repl_cap,
 		rl_rcv_bin, NULL, rl_repl_cluster, 0, NODE_CMP_ANY) < 0) {
 		LM_ERR("Cannot register clusterer callback!\n");
@@ -908,8 +914,9 @@ void rl_timer_repl(utime_t ticks, void *param)
 	rl_pipe_t **pipe;
 	str *key;
 	int nr = 0;
-	int ret;
+	int ret = 0;
 	bin_packet_t packet;
+	time_t now = time(0);
 
 	if (bin_init(&packet, &pipe_repl_cap, RL_PIPE_COUNTER, BIN_VERSION, 0) < 0) {
 		LM_ERR("cannot initiate bin buffer\n");
@@ -934,6 +941,10 @@ void rl_timer_repl(utime_t ticks, void *param)
 			if (RL_USE_CDB(*pipe))
 				goto next_pipe;
 
+			/* do not replicate if about to expire */
+			if ((*pipe)->last_local_used + rl_expire_time < now)
+				goto next_pipe;
+
 			key = iterator_key(&it);
 			if (!key) {
 				LM_ERR("cannot retrieve pipe key\n");
@@ -953,19 +964,13 @@ void rl_timer_repl(utime_t ticks, void *param)
 			 * for the SBT algorithm it is safe to replicate the current
 			 * counter, since it is always updating according to the window
 			 */
+			RL_DBG(*pipe, "replicate=%d", ((*pipe)->algo == PIPE_ALGO_HISTORY ?
+						 (*pipe)->counter : (*pipe)->my_last_counter));
 			if ((ret = bin_push_int(&packet,
 						((*pipe)->algo == PIPE_ALGO_HISTORY ?
 						 (*pipe)->counter : (*pipe)->my_last_counter))) < 0)
 				goto error;
 			nr++;
-
-			if (ret > rl_buffer_th) {
-				/* send the buffer */
-				if (nr)
-					rl_replicate(&packet);
-				bin_reset_back_pointer(&packet);
-				nr = 0;
-			}
 
 next_pipe:
 			if (iterator_next(&it) < 0)
@@ -973,6 +978,13 @@ next_pipe:
 		}
 next_map:
 		RL_RELEASE_LOCK(i);
+		if (ret > rl_buffer_th) {
+			/* send the buffer */
+			if (nr)
+				rl_replicate(&packet);
+			bin_reset_back_pointer(&packet);
+			nr = 0;
+		}
 	}
 	/* if there is anything else to send, do it now */
 	if (nr)

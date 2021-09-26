@@ -29,18 +29,18 @@
 	<row>
 		<entry>2. </entry>
 		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">25</entry>
-		<entry align="center">23</entry>
-		<entry align="center">62</entry>
-		<entry align="center">38</entry>
+		<entry align="center">35</entry>
+		<entry align="center">26</entry>
+		<entry align="center">80</entry>
+		<entry align="center">484</entry>
 	</row>
 	<row>
 		<entry>3. </entry>
 		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">25</entry>
-		<entry align="center">18</entry>
-		<entry align="center">376</entry>
-		<entry align="center">166</entry>
+		<entry align="center">26</entry>
+		<entry align="center">19</entry>
+		<entry align="center">384</entry>
+		<entry align="center">170</entry>
 	</row>
 	<row>
 		<entry>4. </entry>
@@ -60,6 +60,14 @@
 	</row>
 	<row>
 		<entry>6. </entry>
+		<entry>Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>)</entry>
+		<entry align="center">3</entry>
+		<entry align="center">1</entry>
+		<entry align="center">2</entry>
+		<entry align="center">2</entry>
+	</row>
+	<row>
+		<entry>7. </entry>
 		<entry>Dan Pascu (<ulink url="https://github.com/danpascu">@danpascu</ulink>)</entry>
 		<entry align="center">3</entry>
 		<entry align="center">1</entry>
@@ -67,7 +75,7 @@
 		<entry align="center">1</entry>
 	</row>
 	<row>
-		<entry>7. </entry>
+		<entry>8. </entry>
 		<entry>Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>)</entry>
 		<entry align="center">3</entry>
 		<entry align="center">1</entry>
@@ -75,7 +83,7 @@
 		<entry align="center">1</entry>
 	</row>
 	<row>
-		<entry>8. </entry>
+		<entry>9. </entry>
 		<entry>Walter Doekes (<ulink url="https://github.com/wdoekes">@wdoekes</ulink>)</entry>
 		<entry align="center">3</entry>
 		<entry align="center">1</entry>
@@ -85,7 +93,7 @@
 	</tbody>
 	</tgroup>
 	</table>
-	
+
 	<para>
 	    <emphasis>(1) DevScore = author_commits + author_lines_added / (project_lines_added / project_commits) + author_lines_deleted / (project_lines_deleted / project_commits)</emphasis>
 	</para>
@@ -112,13 +120,13 @@
 	<tbody>
 	<row>
 		<entry>1. </entry>
-		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
-		<entry align="center">Jan 2017 - Jan 2021</entry>
+		<entry>Nick Altmann (<ulink url="https://github.com/nikbyte">@nikbyte</ulink>)</entry>
+		<entry align="center">May 2021 - May 2021</entry>
 	</row>
 	<row>
 		<entry>2. </entry>
-		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
-		<entry align="center">Nov 2015 - Jul 2020</entry>
+		<entry>Bogdan-Andrei Iancu (<ulink url="https://github.com/bogdan-iancu">@bogdan-iancu</ulink>)</entry>
+		<entry align="center">Jan 2017 - Apr 2021</entry>
 	</row>
 	<row>
 		<entry>3. </entry>
@@ -132,28 +140,33 @@
 	</row>
 	<row>
 		<entry>5. </entry>
+		<entry>Razvan Crainea (<ulink url="https://github.com/razvancrainea">@razvancrainea</ulink>)</entry>
+		<entry align="center">Nov 2015 - Jan 2020</entry>
+	</row>
+	<row>
+		<entry>6. </entry>
 		<entry>Dan Pascu (<ulink url="https://github.com/danpascu">@danpascu</ulink>)</entry>
 		<entry align="center">May 2019 - May 2019</entry>
 	</row>
 	<row>
-		<entry>6. </entry>
+		<entry>7. </entry>
 		<entry>Vlad Patrascu (<ulink url="https://github.com/rvlad-patrascu">@rvlad-patrascu</ulink>)</entry>
 		<entry align="center">May 2017 - Apr 2019</entry>
 	</row>
 	<row>
-		<entry>7. </entry>
+		<entry>8. </entry>
 		<entry>Peter Lemenkov (<ulink url="https://github.com/lemenkov">@lemenkov</ulink>)</entry>
 		<entry align="center">Jun 2018 - Jun 2018</entry>
 	</row>
 	<row>
-		<entry>8. </entry>
+		<entry>9. </entry>
 		<entry>Ionut Ionita (<ulink url="https://github.com/ionutrazvanionita">@ionutrazvanionita</ulink>)</entry>
 		<entry align="center">Oct 2015 - Apr 2017</entry>
 	</row>
 	</tbody>
 	</tgroup>
 	</table>
-	
+
 	<para>
 	    <emphasis>(1) including any documentation-related commits, excluding merge commits</emphasis>
 	</para>

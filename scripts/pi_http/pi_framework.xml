@@ -81,7 +81,8 @@
 		<column><field>password</field><type>DB_STR</type></column>
 		<column><field>email_address</field><type>DB_STR</type></column>
 		<column><field>ha1</field><type>DB_STR</type></column>
-		<column><field>ha1b</field><type>DB_STR</type></column>
+		<column><field>ha1_sha256</field><type>DB_STR</type></column>
+		<column><field>ha1_sha512t256</field><type>DB_STR</type></column>
 		<column><field>rpid</field><type>DB_STR</type></column>
 	</db_table>
 	<!-- Declaration of uri table-->
@@ -167,12 +168,6 @@
 		<column><field>si_key</field><type>DB_STR</type></column>
 		<column><field>scenario</field><type>DB_STR</type></column>
 		<column><field>sstate</field><type>DB_INT</type></column>
-		<column><field>next_sstate</field><type>DB_INT</type></column>
-		<column><field>sparam0</field><type>DB_STR</type></column>
-		<column><field>sparam1</field><type>DB_STR</type></column>
-		<column><field>sparam2</field><type>DB_STR</type></column>
-		<column><field>sparam3</field><type>DB_STR</type></column>
-		<column><field>sparam4</field><type>DB_STR</type></column>
 		<column><field>sdp</field><type>DB_BLOB</type></column>
 		<column><field>lifetime</field><type>DB_INT</type></column>
 		<column><field>e1_type</field><type>DB_INT</type></column>
@@ -802,6 +797,7 @@
 		<column><field>remote_contact</field><type>DB_STR</type></column>
 		<column><field>version</field><type>DB_INT</type></column>
 		<column><field>extra_headers</field><type>DB_BLOB</type></column>
+		<column><field>sharing_tag</field><type>DB_STR</type></column>
 	</db_table>
 	<!-- Declaration of qr_profiles table-->
 	<db_table id="qr_profiles">
@@ -882,6 +878,7 @@
 		<column><field>expiry</field><type>DB_INT</type></column>
 		<column><field>forced_socket</field><type>DB_STR</type></column>
 		<column><field>cluster_shtag</field><type>DB_STR</type></column>
+		<column><field>state</field><type>DB_INT</type></column>
 	</db_table>
 	<!-- Declaration of rls_presentity table-->
 	<db_table id="rls_presentity">
@@ -1045,7 +1042,7 @@
 		<column><field>contact_id</field><type>DB_BIGINT</type></column>
 		<column><field>username</field><type>DB_STR</type></column>
 		<column><field>domain</field><type>DB_STR</type></column>
-		<column><field>contact</field><type>DB_STR</type></column>
+		<column><field>contact</field><type>DB_BLOB</type></column>
 		<column><field>received</field><type>DB_STR</type></column>
 		<column><field>path</field><type>DB_STR</type></column>
 		<column><field>expires</field><type>DB_INT</type></column>
@@ -1282,7 +1279,8 @@
 				<col><field>password</field></col>
 				<col><field>email_address</field></col>
 				<col><field>ha1</field></col>
-				<col><field>ha1b</field></col>
+				<col><field>ha1_sha256</field></col>
+				<col><field>ha1_sha512t256</field></col>
 				<col><field>rpid</field></col>
 			</query_cols>
 		</cmd>
@@ -1295,7 +1293,8 @@
 				<col><field>password</field></col>
 				<col><field>email_address</field></col>
 				<col><field>ha1</field></col>
-				<col><field>ha1b</field></col>
+				<col><field>ha1_sha256</field></col>
+				<col><field>ha1_sha512t256</field></col>
 				<col><field>rpid</field></col>
 			</query_cols>
 		</cmd>
@@ -1311,7 +1310,8 @@
 				<col><field>password</field></col>
 				<col><field>email_address</field></col>
 				<col><field>ha1</field></col>
-				<col><field>ha1b</field></col>
+				<col><field>ha1_sha256</field></col>
+				<col><field>ha1_sha512t256</field></col>
 				<col><field>rpid</field></col>
 			</query_cols>
 		</cmd>
@@ -1628,12 +1628,6 @@
 				<col><field>si_key</field></col>
 				<col><field>scenario</field></col>
 				<col><field>sstate</field></col>
-				<col><field>next_sstate</field></col>
-				<col><field>sparam0</field></col>
-				<col><field>sparam1</field></col>
-				<col><field>sparam2</field></col>
-				<col><field>sparam3</field></col>
-				<col><field>sparam4</field></col>
 				<col><field>sdp</field></col>
 				<col><field>lifetime</field></col>
 				<col><field>e1_type</field></col>
@@ -1660,12 +1654,6 @@
 				<col><field>si_key</field></col>
 				<col><field>scenario</field></col>
 				<col><field>sstate</field></col>
-				<col><field>next_sstate</field></col>
-				<col><field>sparam0</field></col>
-				<col><field>sparam1</field></col>
-				<col><field>sparam2</field></col>
-				<col><field>sparam3</field></col>
-				<col><field>sparam4</field></col>
 				<col><field>sdp</field></col>
 				<col><field>lifetime</field></col>
 				<col><field>e1_type</field></col>
@@ -1695,12 +1683,6 @@
 				<col><field>si_key</field></col>
 				<col><field>scenario</field></col>
 				<col><field>sstate</field></col>
-				<col><field>next_sstate</field></col>
-				<col><field>sparam0</field></col>
-				<col><field>sparam1</field></col>
-				<col><field>sparam2</field></col>
-				<col><field>sparam3</field></col>
-				<col><field>sparam4</field></col>
 				<col><field>sdp</field></col>
 				<col><field>lifetime</field></col>
 				<col><field>e1_type</field></col>
@@ -4048,6 +4030,7 @@
 				<col><field>remote_contact</field></col>
 				<col><field>version</field></col>
 				<col><field>extra_headers</field></col>
+				<col><field>sharing_tag</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>add</cmd_name>
@@ -4073,6 +4056,7 @@
 				<col><field>remote_contact</field></col>
 				<col><field>version</field></col>
 				<col><field>extra_headers</field></col>
+				<col><field>sharing_tag</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>update</cmd_name>
@@ -4101,6 +4085,7 @@
 				<col><field>remote_contact</field></col>
 				<col><field>version</field></col>
 				<col><field>extra_headers</field></col>
+				<col><field>sharing_tag</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>delete</cmd_name>
@@ -4388,6 +4373,7 @@
 				<col><field>expiry</field></col>
 				<col><field>forced_socket</field></col>
 				<col><field>cluster_shtag</field></col>
+				<col><field>state</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>add</cmd_name>
@@ -4405,6 +4391,7 @@
 				<col><field>expiry</field></col>
 				<col><field>forced_socket</field></col>
 				<col><field>cluster_shtag</field></col>
+				<col><field>state</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>update</cmd_name>
@@ -4425,6 +4412,7 @@
 				<col><field>expiry</field></col>
 				<col><field>forced_socket</field></col>
 				<col><field>cluster_shtag</field></col>
+				<col><field>state</field></col>
 			</query_cols>
 		</cmd>
 		<cmd><cmd_name>delete</cmd_name>

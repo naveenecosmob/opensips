@@ -64,7 +64,7 @@ dispatcher Module
                       [partition])
 
               1.4.7. ds_is_in_list(ip, port, [set], [partition],
-                      [active_only])
+                      [active_only], [pattern])
 
               1.4.8. ds_push_script_attrs(script_attr, ip, port,
                       set, [partition])
@@ -560,7 +560,9 @@ modparam("dispatcher", "sock_avp", "$avp(275)")
    pseudovariable pattern used to detect the load of each
    destination. The name of the pseudovariable should contain the
    string “%u”, which will be internally replaced by the module
-   with the uri of the destination.
+   with the uri of the destination. The string “%i” can also be
+   used and will be replaced with the set ID of the destination
+   (useful in cases where same uri exists in multiple sets).
 
    Default value is “none”.
 
@@ -1010,7 +1012,8 @@ if (ds_count($avp(set), "ip", $avp(result), $avp(partition))) {
 }
 ...
 
-1.4.7.  ds_is_in_list(ip, port, [set], [partition], [active_only])
+1.4.7.  ds_is_in_list(ip, port, [set], [partition], [active_only],
+[pattern])
 
    This function returns true only if "ip" and "port" point to a
    host from the given dispatcher "set".
@@ -1027,6 +1030,10 @@ if (ds_count($avp(set), "ip", $avp(result), $avp(partition))) {
      * active_only (int, optional) - specify a non-zero value in
        order to only search through the active destinations
        (ignore the ones in probing and inactive states)
+     * pattern (string, optional) - a glob pattern used to match
+       destination attributes. If the destination ip and port
+       matches but the pattern does not match the destination's
+       attribute, the function will fail.
 
    This function can be used from REQUEST_ROUTE, FAILURE_ROUTE,
    BRANCH_ROUTE and ONREPLY_ROUTE.
@@ -1334,12 +1341,12 @@ Chapter 3. Contributors
    Table 3.1. Top contributors by DevScore^(1), authored
    commits^(2) and lines added/removed^(3)
      Name DevScore Commits Lines ++ Lines --
-   1. Bogdan-Andrei Iancu (@bogdan-iancu) 150 95 2797 1908
-   2. Liviu Chircu (@liviuchircu) 99 61 1637 1421
+   1. Bogdan-Andrei Iancu (@bogdan-iancu) 151 96 2810 1908
+   2. Liviu Chircu (@liviuchircu) 104 66 1661 1426
    3. Daniel-Constantin Mierla (@miconda) 81 39 3372 844
    4. Andrei Datcu (@andrei-datcu) 47 15 2153 846
    5. Ionut Ionita (@ionutrazvanionita) 43 17 1145 969
-   6. Razvan Crainea (@razvancrainea) 35 29 415 87
+   6. Razvan Crainea (@razvancrainea) 37 31 454 96
    7. Ovidiu Sas (@ovidiusas) 31 17 705 434
    8. Vlad Paiu (@vladpaiu) 16 9 673 33
    9. Vlad Patrascu (@rvlad-patrascu) 15 8 366 227
@@ -1347,13 +1354,13 @@ Chapter 3. Contributors
 
    All remaining contributors: Carsten Bock, Ionel Cerghit
    (@ionel-cerghit), Elena-Ramona Modroiu, Klaus Darilion, Anca
-   Vamanu, Jarrod Baumann (@jarrodb), Walter Doekes (@wdoekes),
-   Nick Altmann (@nikbyte), Jan Janak (@janakj), Andrei
-   Pelinescu-Onciul, Peter Lemenkov (@lemenkov), Stanislaw
-   Pitucha, Federico Cabiddu, Konstantin Bokarius, Andreas Granig,
-   John Riordan, Aron Podrigal (@ar45), Julián Moreno Patiño,
-   Kevin McAllister, Roman Sevko, UnixDev, David Sanders, Edson
-   Gellert Schubert.
+   Vamanu, John Burke (@john08burke), Jarrod Baumann (@jarrodb),
+   Walter Doekes (@wdoekes), Nick Altmann (@nikbyte), Jan Janak
+   (@janakj), Andrei Pelinescu-Onciul, Peter Lemenkov (@lemenkov),
+   Stanislaw Pitucha, Federico Cabiddu, Konstantin Bokarius,
+   Andreas Granig, John Riordan, Aron Podrigal (@ar45), Julián
+   Moreno Patiño, Kevin McAllister, Roman Sevko, UnixDev, David
+   Sanders, Edson Gellert Schubert.
 
    (1) DevScore = author_commits + author_lines_added /
    (project_lines_added / project_commits) + author_lines_deleted
@@ -1375,26 +1382,27 @@ Chapter 3. Contributors
 
    Table 3.2. Most recently active contributors^(1) to this module
                       Name                   Commit Activity
-   1.  Razvan Crainea (@razvancrainea)     May 2011 - Jan 2021
-   2.  Liviu Chircu (@liviuchircu)         Aug 2012 - Jul 2020
-   3.  Bogdan-Andrei Iancu (@bogdan-iancu) Oct 2005 - Apr 2020
-   4.  Vlad Paiu (@vladpaiu)               Mar 2012 - Apr 2020
-   5.  Peter Lemenkov (@lemenkov)          Jun 2018 - Feb 2020
-   6.  Vlad Patrascu (@rvlad-patrascu)     May 2017 - Jan 2020
-   7.  Roman Sevko                         Oct 2019 - Oct 2019
-   8.  Nick Altmann (@nikbyte)             Mar 2012 - Mar 2018
-   9.  Ionel Cerghit (@ionel-cerghit)      Jul 2015 - Jun 2016
-   10. Ionut Ionita (@ionutrazvanionita)   Jul 2014 - May 2016
+   1.  Liviu Chircu (@liviuchircu)         Aug 2012 - Mar 2021
+   2.  John Burke (@john08burke)           Feb 2021 - Feb 2021
+   3.  Razvan Crainea (@razvancrainea)     May 2011 - Jan 2021
+   4.  Bogdan-Andrei Iancu (@bogdan-iancu) Oct 2005 - Jul 2020
+   5.  Vlad Paiu (@vladpaiu)               Mar 2012 - Apr 2020
+   6.  Peter Lemenkov (@lemenkov)          Jun 2018 - Feb 2020
+   7.  Vlad Patrascu (@rvlad-patrascu)     May 2017 - Jan 2020
+   8.  Roman Sevko                         Oct 2019 - Oct 2019
+   9.  Nick Altmann (@nikbyte)             Mar 2012 - Mar 2018
+   10. Ionel Cerghit (@ionel-cerghit)      Jul 2015 - Jun 2016
 
-   All remaining contributors: Julián Moreno Patiño, Jarrod
-   Baumann (@jarrodb), Ovidiu Sas (@ovidiusas), David Sanders,
-   Aron Podrigal (@ar45), Andrei Datcu (@andrei-datcu), Walter
-   Doekes (@wdoekes), Stanislaw Pitucha, Anca Vamanu, John
-   Riordan, UnixDev, Kevin McAllister, Klaus Darilion, Carsten
-   Bock, Daniel-Constantin Mierla (@miconda), Henning Westerholt
-   (@henningw), Konstantin Bokarius, Edson Gellert Schubert,
-   Federico Cabiddu, Elena-Ramona Modroiu, Andreas Granig, Andrei
-   Pelinescu-Onciul, Jan Janak (@janakj).
+   All remaining contributors: Ionut Ionita (@ionutrazvanionita),
+   Julián Moreno Patiño, Jarrod Baumann (@jarrodb), Ovidiu Sas
+   (@ovidiusas), David Sanders, Aron Podrigal (@ar45), Andrei
+   Datcu (@andrei-datcu), Walter Doekes (@wdoekes), Stanislaw
+   Pitucha, Anca Vamanu, John Riordan, UnixDev, Kevin McAllister,
+   Klaus Darilion, Carsten Bock, Daniel-Constantin Mierla
+   (@miconda), Henning Westerholt (@henningw), Konstantin
+   Bokarius, Edson Gellert Schubert, Federico Cabiddu,
+   Elena-Ramona Modroiu, Andreas Granig, Andrei Pelinescu-Onciul,
+   Jan Janak (@janakj).
 
    (1) including any documentation-related commits, excluding
    merge commits
@@ -1403,16 +1411,17 @@ Chapter 4. Documentation
 
 4.1. Contributors
 
-   Last edited by: Liviu Chircu (@liviuchircu), Bogdan-Andrei
+   Last edited by: John Burke (@john08burke), Liviu Chircu
+   (@liviuchircu), Razvan Crainea (@razvancrainea), Bogdan-Andrei
    Iancu (@bogdan-iancu), Vlad Paiu (@vladpaiu), Roman Sevko, Vlad
-   Patrascu (@rvlad-patrascu), Razvan Crainea (@razvancrainea),
-   Peter Lemenkov (@lemenkov), Nick Altmann (@nikbyte), Ionel
-   Cerghit (@ionel-cerghit), Jarrod Baumann (@jarrodb), Ovidiu Sas
-   (@ovidiusas), Ionut Ionita (@ionutrazvanionita), Andrei Datcu
-   (@andrei-datcu), Walter Doekes (@wdoekes), Stanislaw Pitucha,
-   Anca Vamanu, Klaus Darilion, Daniel-Constantin Mierla
-   (@miconda), Konstantin Bokarius, Carsten Bock, Edson Gellert
-   Schubert, Elena-Ramona Modroiu.
+   Patrascu (@rvlad-patrascu), Peter Lemenkov (@lemenkov), Nick
+   Altmann (@nikbyte), Ionel Cerghit (@ionel-cerghit), Jarrod
+   Baumann (@jarrodb), Ovidiu Sas (@ovidiusas), Ionut Ionita
+   (@ionutrazvanionita), Andrei Datcu (@andrei-datcu), Walter
+   Doekes (@wdoekes), Stanislaw Pitucha, Anca Vamanu, Klaus
+   Darilion, Daniel-Constantin Mierla (@miconda), Konstantin
+   Bokarius, Carsten Bock, Edson Gellert Schubert, Elena-Ramona
+   Modroiu.
 
    Documentation Copyrights:
 
